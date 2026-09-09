@@ -16,9 +16,11 @@
  * 3. Deploy > New deployment > Web app.
  *    - Execute as: User accessing the web app
  *    - Who has access: Anyone with a Google account
- * 4. Share the deployment URL with your PICs. Add each PIC's email + outlet to the
- *    mapping sheet for their country. Also share the underlying Sheet with each PIC's
- *    email as Viewer.
+ * 4. Share the deployment URL with your PICs. Add each PIC/Admin via the in-portal
+ *    "Manage Access" panel (Admins only) - it writes the mapping row AND grants that
+ *    email Viewer access to this Sheet automatically (Spreadsheet.addViewer/removeViewer),
+ *    since the web app runs "as the user accessing it" and so needs the Sheet readable
+ *    by them directly. First use may prompt you to authorize the added Drive scope.
  */
 
 // Singapore tasks carry dedicated "Outlet"/"Role"/"Full Name" custom fields.
@@ -221,6 +223,49 @@ function isValidEmail_(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
+// The web app runs "as the user accessing it," so a PIC needs their own Viewer access to this
+// Sheet or every request they make fails with a permission error before it ever reaches doGet.
+// Manage Access grants/revokes that Viewer access automatically so admins never have to open
+// the Sheet's own Share dialog. Best-effort: a Drive sharing hiccup shouldn't block the
+// Admins/PIC_Mapping row write, since that row is the real source of truth for access.
+function grantSheetAccess_(email) {
+  try {
+    SpreadsheetApp.getActiveSpreadsheet().addViewer(email);
+  } catch (e) {
+    // Ignore - e.g. inviting an address Drive can't resolve yet.
+  }
+}
+
+function revokeSheetAccessIfUnused_(email) {
+  try {
+    if (!emailHasAnyAccess_(email)) {
+      SpreadsheetApp.getActiveSpreadsheet().removeViewer(email);
+    }
+  } catch (e) {
+    // Ignore - e.g. they were never actually a Viewer (added manually as Editor, etc.).
+  }
+}
+
+function emailHasAnyAccess_(email) {
+  var target = String(email || '').trim().toLowerCase();
+  var adminSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ADMIN_SHEET);
+  if (adminSheet) {
+    var adminValues = adminSheet.getDataRange().getValues();
+    for (var i = 1; i < adminValues.length; i++) {
+      if (String(adminValues[i][0] || '').trim().toLowerCase() === target) return true;
+    }
+  }
+  return COUNTRIES.some(function (c) {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(c.mappingSheet);
+    if (!sheet) return false;
+    var values = sheet.getDataRange().getValues();
+    for (var j = 1; j < values.length; j++) {
+      if (String(values[j][0] || '').trim().toLowerCase() === target) return true;
+    }
+    return false;
+  });
+}
+
 function listAccess() {
   requireAdmin_();
   var admins = [];
@@ -259,6 +304,7 @@ function addAdmin(email) {
     }
   }
   sheet.appendRow([email]);
+  grantSheetAccess_(email);
   return listAccess();
 }
 
@@ -278,6 +324,7 @@ function removeAdmin(email) {
       sheet.deleteRow(r + 1);
     }
   }
+  revokeSheetAccessIfUnused_(email);
   return listAccess();
 }
 
@@ -299,6 +346,7 @@ function addPicMapping(countryCode, email, outlet) {
     }
   }
   sheet.appendRow([email, outlet]);
+  grantSheetAccess_(email);
   return listAccess();
 }
 
@@ -317,6 +365,7 @@ function removePicMapping(countryCode, email, outlet) {
       sheet.deleteRow(r + 1);
     }
   }
+  revokeSheetAccessIfUnused_(email);
   return listAccess();
 }
 
