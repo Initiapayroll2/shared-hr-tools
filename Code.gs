@@ -79,7 +79,7 @@ function doGet(e) {
     }
   }
 
-  return HtmlOutput_('Onboarding Status', renderShell_(countries, email));
+  return HtmlOutput_('Onboarding Status', renderShell_(countries, email, isAdmin));
 }
 
 function getClickUpTasks_(country) {
@@ -206,9 +206,123 @@ function getOutletsForEmail_(email, mappingSheetName) {
   return outlets;
 }
 
+// ---- Admin: manage access (Admins + PIC_Mapping/MY_PIC_Mapping sheets), called from the client ----
+// Every function here re-checks the caller against the Admins sheet itself - the "Manage Access"
+// button is only ever rendered for admins, but google.script.run functions are callable directly
+// from a browser console by anyone signed in, so the server-side check is the real boundary.
+
+function requireAdmin_() {
+  var email = Session.getActiveUser().getEmail();
+  if (!email || !isAdmin_(email)) throw new Error('Not authorized.');
+  return email;
+}
+
+function isValidEmail_(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+function listAccess() {
+  requireAdmin_();
+  var admins = [];
+  var adminSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ADMIN_SHEET);
+  if (adminSheet) {
+    var adminValues = adminSheet.getDataRange().getValues();
+    for (var i = 1; i < adminValues.length; i++) {
+      var a = String(adminValues[i][0] || '').trim();
+      if (a) admins.push(a);
+    }
+  }
+  var mappings = [];
+  COUNTRIES.forEach(function (c) {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(c.mappingSheet);
+    if (!sheet) return;
+    var values = sheet.getDataRange().getValues();
+    for (var j = 1; j < values.length; j++) {
+      var email = String(values[j][0] || '').trim();
+      var outlet = String(values[j][1] || '').trim();
+      if (email && outlet) mappings.push({ country: c.code, email: email, outlet: outlet });
+    }
+  });
+  return { admins: admins, mappings: mappings };
+}
+
+function addAdmin(email) {
+  requireAdmin_();
+  email = String(email || '').trim();
+  if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ADMIN_SHEET);
+  if (!sheet) throw new Error('Admins sheet not found.');
+  var values = sheet.getDataRange().getValues();
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim().toLowerCase() === email.toLowerCase()) {
+      throw new Error(email + ' is already an admin.');
+    }
+  }
+  sheet.appendRow([email]);
+  return listAccess();
+}
+
+function removeAdmin(email) {
+  requireAdmin_();
+  email = String(email || '').trim().toLowerCase();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ADMIN_SHEET);
+  if (!sheet) throw new Error('Admins sheet not found.');
+  var values = sheet.getDataRange().getValues();
+  var remaining = 0;
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim()) remaining++;
+  }
+  if (remaining <= 1) throw new Error('Cannot remove the last admin.');
+  for (var r = values.length - 1; r >= 1; r--) {
+    if (String(values[r][0] || '').trim().toLowerCase() === email) {
+      sheet.deleteRow(r + 1);
+    }
+  }
+  return listAccess();
+}
+
+function addPicMapping(countryCode, email, outlet) {
+  requireAdmin_();
+  var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
+  if (!country) throw new Error('Unknown country.');
+  email = String(email || '').trim();
+  outlet = String(outlet || '').trim();
+  if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
+  if (!outlet) throw new Error('Choose an outlet.');
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(country.mappingSheet);
+  if (!sheet) throw new Error(country.mappingSheet + ' sheet not found.');
+  var values = sheet.getDataRange().getValues();
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim().toLowerCase() === email.toLowerCase() &&
+        String(values[i][1] || '').trim().toLowerCase() === outlet.toLowerCase()) {
+      throw new Error(email + ' already has access to ' + outlet + '.');
+    }
+  }
+  sheet.appendRow([email, outlet]);
+  return listAccess();
+}
+
+function removePicMapping(countryCode, email, outlet) {
+  requireAdmin_();
+  var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
+  if (!country) throw new Error('Unknown country.');
+  email = String(email || '').trim().toLowerCase();
+  outlet = String(outlet || '').trim().toLowerCase();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(country.mappingSheet);
+  if (!sheet) throw new Error(country.mappingSheet + ' sheet not found.');
+  var values = sheet.getDataRange().getValues();
+  for (var r = values.length - 1; r >= 1; r--) {
+    if (String(values[r][0] || '').trim().toLowerCase() === email &&
+        String(values[r][1] || '').trim().toLowerCase() === outlet) {
+      sheet.deleteRow(r + 1);
+    }
+  }
+  return listAccess();
+}
+
 // ---- Page shell: header + country toggle + filter select + empty client-rendered dashboard ----
 
-function renderShell_(countries, email) {
+function renderShell_(countries, email, isAdmin) {
   var clientCountries = countries.map(function (c) {
     var clientRows = c.rows.map(function (r) {
       return {
@@ -231,10 +345,14 @@ function renderShell_(countries, email) {
         '<h1>Onboarding Status</h1>' +
         '<div class="muted" id="headerLabel">' + escapeHtml_(countries[0].outletsLabel) + '</div>' +
       '</div>' +
-      '<div class="muted">' + escapeHtml_(email) + '</div>' +
+      '<div style="display:flex;align-items:center;gap:12px;">' +
+        (isAdmin ? '<button class="manage-btn" onclick="openAccessPanel()">Manage Access</button>' : '') +
+        '<div class="muted">' + escapeHtml_(email) + '</div>' +
+      '</div>' +
     '</div>' +
     '<div id="filter-bar"></div>' +
     '<div id="dashboard-body"></div>' +
+    '<div id="accessModal" class="modal-overlay" style="display:none;"><div class="modal" id="accessModalContent"></div></div>' +
     '<script>' + clientEngine_() +
       '\nvar COUNTRIES=' + countriesJson + ';' +
       '\nvar CURRENT=COUNTRIES[0].code;' +
@@ -322,6 +440,85 @@ function clientEngine_() {
       'var el=document.getElementById("dashboard-body");' +
       'if(rows.length===0){el.innerHTML=emptyState(selected);return;}' +
       'el.innerHTML=buildStatCards(rows)+buildOutletBreakdown(rows,selected)+buildStatusBar(rows)+buildGroupedTable(rows);' +
+    '}' +
+    'var LAST_ACCESS_DATA=null;' +
+    'function openAccessPanel(){' +
+      'document.getElementById("accessModal").style.display="flex";' +
+      'document.getElementById("accessModalContent").innerHTML="<p class=\\"muted\\">Loading\\u2026</p>";' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(accessPanelError).listAccess();' +
+    '}' +
+    'function closeAccessPanel(){document.getElementById("accessModal").style.display="none";}' +
+    'function accessPanelError(err){' +
+      'var msg=err&&err.message?err.message:String(err);' +
+      'var box=document.getElementById("accessModalContent");' +
+      'if(box)box.innerHTML="<button class=\\"modal-close\\" onclick=\\"closeAccessPanel()\\">&times;</button><h2>Manage Access</h2><div class=\\"access-error\\">"+esc(msg)+"</div>";' +
+    '}' +
+    'function armConfirm(btn,onConfirm){' +
+      'btn.textContent="Click again to confirm";' +
+      'btn.className="remove-btn confirming";' +
+      'btn.onclick=onConfirm;' +
+    '}' +
+    'function renderAccessPanel(data){' +
+      'LAST_ACCESS_DATA=data;' +
+      'var html="<button class=\\"modal-close\\" onclick=\\"closeAccessPanel()\\">&times;</button>";' +
+      'html+="<h2>Manage Access</h2><div class=\\"muted\\" style=\\"margin-bottom:8px;\\">Changes apply immediately.</div>";' +
+      'html+="<div class=\\"access-error\\" id=\\"topAccessError\\"></div>";' +
+      'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">Admins (see every outlet)</div>";' +
+      'data.admins.forEach(function(a,i){' +
+        'html+="<div class=\\"access-row\\"><span>"+esc(a)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveAdmin("+i+")})\\">Remove</button></div>";' +
+      '});' +
+      'html+="<div class=\\"add-form\\"><input type=\\"email\\" id=\\"newAdminEmail\\" placeholder=\\"name@company.com\\"/><button class=\\"add-btn\\" onclick=\\"doAddAdmin()\\">Add admin</button></div>";' +
+      'html+="<div class=\\"access-error\\" id=\\"adminError\\"></div>";' +
+      'html+="</div>";' +
+      'COUNTRIES.forEach(function(c){' +
+        'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">"+esc(c.label)+" PICs</div>";' +
+        'var any=false;' +
+        'data.mappings.forEach(function(m,idx){' +
+          'if(m.country!==c.code)return;' +
+          'any=true;' +
+          'html+="<div class=\\"access-row\\"><span>"+esc(m.email)+" \\u2192 "+esc(m.outlet)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveMapping("+idx+")})\\">Remove</button></div>";' +
+        '});' +
+        'if(!any)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No PICs assigned yet.</div>";' +
+        'var opts=(c.outlets||[]).map(function(o){return "<option value=\\""+esc(o)+"\\">"+esc(o)+"</option>";}).join("");' +
+        'html+="<div class=\\"add-form\\">"+' +
+          '"<input type=\\"email\\" id=\\"newPicEmail_"+c.code+"\\" placeholder=\\"name@company.com\\"/>"+' +
+          '"<select id=\\"newPicOutlet_"+c.code+"\\"><option value=\\"\\">Select outlet</option>"+opts+"</select>"+' +
+          '"<button class=\\"add-btn\\" onclick=\\"doAddMapping(\'"+c.code+"\')\\">Add PIC</button></div>";' +
+        'html+="<div class=\\"access-error\\" id=\\"mappingError_"+c.code+"\\"></div>";' +
+        'html+="</div>";' +
+      '});' +
+      'document.getElementById("accessModalContent").innerHTML=html;' +
+    '}' +
+    'function doAddAdmin(){' +
+      'var el=document.getElementById("newAdminEmail");' +
+      'var email=el.value.trim();' +
+      'var errBox=document.getElementById("adminError");' +
+      'if(errBox)errBox.textContent="";' +
+      'google.script.run.withSuccessHandler(function(data){el.value="";renderAccessPanel(data);}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addAdmin(email);' +
+    '}' +
+    'function doRemoveAdmin(i){' +
+      'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.admins[i])return;' +
+      'var email=LAST_ACCESS_DATA.admins[i];' +
+      'var errBox=document.getElementById("topAccessError");' +
+      'if(errBox)errBox.textContent="";' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removeAdmin(email);' +
+    '}' +
+    'function doAddMapping(countryCode){' +
+      'var emailEl=document.getElementById("newPicEmail_"+countryCode);' +
+      'var outletEl=document.getElementById("newPicOutlet_"+countryCode);' +
+      'var email=emailEl.value.trim();' +
+      'var outlet=outletEl.value;' +
+      'var errBox=document.getElementById("mappingError_"+countryCode);' +
+      'if(errBox)errBox.textContent="";' +
+      'if(!outlet){if(errBox)errBox.textContent="Choose an outlet.";return;}' +
+      'google.script.run.withSuccessHandler(function(data){emailEl.value="";outletEl.value="";renderAccessPanel(data);}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addPicMapping(countryCode,email,outlet);' +
+    '}' +
+    'function doRemoveMapping(idx){' +
+      'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.mappings[idx])return;' +
+      'var m=LAST_ACCESS_DATA.mappings[idx];' +
+      'var errBox=document.getElementById("topAccessError");' +
+      'if(errBox)errBox.textContent="";' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removePicMapping(m.country,m.email,m.outlet);' +
     '}';
 }
 
@@ -377,6 +574,22 @@ function HtmlOutput_(title, bodyHtml) {
       'th{background:#fafafa;font-weight:600;color:#444;}' +
       'tr.group-header td{background:#fafbfc;padding:8px 12px;border-bottom:1px solid #eee;}' +
       '.badge{display:inline-block;color:#fff;padding:3px 10px;border-radius:12px;font-size:12px;white-space:nowrap;}' +
+
+      '.manage-btn{font-size:13px;padding:6px 16px;border-radius:20px;border:1px solid #1c1c1c;background:#fff;color:#1c1c1c;cursor:pointer;}' +
+      '.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);align-items:center;justify-content:center;z-index:1000;}' +
+      '.modal{background:#fff;border-radius:12px;padding:24px;max-width:640px;width:92%;max-height:85vh;overflow-y:auto;box-shadow:0 10px 40px rgba(0,0,0,0.2);position:relative;}' +
+      '.modal h2{margin:0 0 4px 0;font-size:18px;}' +
+      '.modal-close{position:absolute;top:16px;right:16px;cursor:pointer;font-size:20px;line-height:1;color:#6b6f76;background:none;border:none;}' +
+      '.access-section{margin-bottom:20px;}' +
+      '.access-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f2;font-size:13px;}' +
+      '.access-row:last-child{border-bottom:none;}' +
+      '.remove-btn{color:#c0392b;background:none;border:1px solid #f0d5d0;border-radius:6px;padding:3px 9px;font-size:12px;cursor:pointer;flex-shrink:0;}' +
+      '.remove-btn.confirming{background:#c0392b;color:#fff;border-color:#c0392b;}' +
+      '.add-form{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;}' +
+      '.add-form input,.add-form select{font-size:13px;padding:6px 8px;border-radius:6px;border:1px solid #ddd;}' +
+      '.add-form input[type=email]{flex:1;min-width:180px;}' +
+      '.add-btn{background:#1c1c1c;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;flex-shrink:0;}' +
+      '.access-error{color:#c0392b;font-size:12px;margin-top:6px;min-height:14px;}' +
     '</style></head><body>' + bodyHtml + '</body></html>';
   return HtmlService.createHtmlOutput(html)
     .setTitle(title)
