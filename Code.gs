@@ -6,21 +6,20 @@
  * client-side when the outlet filter changes - no page reload.
  *
  * SETUP:
- * 1. Google Sheet with tabs named exactly "PIC_Mapping", "MY_PIC_Mapping" and "Admins".
- *    PIC_Mapping (Singapore) & MY_PIC_Mapping (Malaysia) columns (row 1 headers): Email | Outlet
- *    Admins columns (row 1 headers):      Email   (sees every outlet, bird's-eye view)
- *    Each country's outlets are a separate namespace - the same outlet name (e.g. "Modu K")
- *    can exist in both countries and belong to a different PIC in each.
- * 2. Script Properties (Project Settings > Script Properties):
+ * 1. Script Properties (Project Settings > Script Properties):
  *    CLICKUP_TOKEN = your ClickUp personal API token.
- * 3. Deploy > New deployment > Web app.
+ *    (ADMINS and PIC_MAPPINGS properties are created/managed automatically by the
+ *    in-portal "Manage Access" panel below - no manual setup needed for those.)
+ * 2. Deploy > New deployment > Web app.
  *    - Execute as: User accessing the web app
  *    - Who has access: Anyone with a Google account
- * 4. Share the deployment URL with your PICs. Add each PIC/Admin via the in-portal
- *    "Manage Access" panel (Admins only) - it writes the mapping row AND grants that
- *    email Viewer access to this Sheet automatically (Spreadsheet.addViewer/removeViewer),
- *    since the web app runs "as the user accessing it" and so needs the Sheet readable
- *    by them directly. First use may prompt you to authorize the added Drive scope.
+ * 3. Share the deployment URL. Add each PIC/Admin via the in-portal "Manage Access"
+ *    panel (Admins only). There is deliberately no Google Sheet involved anywhere in
+ *    this project: who-has-access-to-what is sensitive (it shows every PIC's outlet
+ *    assignment), and a Sheet is a Drive file - shareable, findable, exportable. It's
+ *    stored instead in this script's own Properties Service, which isn't a Drive object
+ *    at all, so there's nothing for a PIC to ever find in their Drive, regardless of any
+ *    sharing setting. No PIC needs, or gets, any Drive/Sheet permission at any point.
  */
 
 // Singapore tasks carry dedicated "Outlet"/"Role"/"Full Name" custom fields.
@@ -29,20 +28,19 @@
 // so outletFromTitle:true switches getClickUpTasks_ over to parsing the title instead.
 var COUNTRIES = [
   {
-    code: 'SG', label: 'Singapore', listId: '901819849781', mappingSheet: 'PIC_Mapping',
+    code: 'SG', label: 'Singapore', listId: '901819849781',
     outletFromTitle: false, fullNameField: 'Full Name', outletField: 'Outlet', roleField: 'Role', startDateField: 'Proposed Start Date'
   },
   {
-    code: 'MY', label: 'Malaysia', listId: '901819757280', mappingSheet: 'MY_PIC_Mapping',
+    code: 'MY', label: 'Malaysia', listId: '901819757280',
     outletFromTitle: true, fullNameField: 'Full Name (as per NRIC/ID)', outletField: null, roleField: null, startDateField: 'PT Start Date'
   }
 ];
-var ADMIN_SHEET = 'Admins';
 
 // Each country has its own outlet namespace - an outlet named e.g. "Modu K" in
 // Singapore is a completely different outlet from one with the same name in
 // Malaysia. So a PIC's access is always resolved within a single country's own
-// mapping sheet and own ClickUp list - never matched against another country's
+// stored mappings and own ClickUp list - never matched against another country's
 // outlets or tasks.
 function doGet(e) {
   var email = Session.getActiveUser().getEmail();
@@ -67,7 +65,7 @@ function doGet(e) {
   } else {
     countries = [];
     COUNTRIES.forEach(function (c) {
-      var outletOptions = getOutletsForEmail_(email, c.mappingSheet);
+      var outletOptions = getOutletsForEmail_(email, c.code);
       if (outletOptions.length === 0) return;
       var wanted = {};
       outletOptions.forEach(function (o) { wanted[o.toLowerCase()] = true; });
@@ -181,37 +179,48 @@ function getOutletFieldOptions_(listId) {
     .filter(function (n) { return n; });
 }
 
+// ---- Access-control storage: Properties Service, deliberately not a Sheet ----
+// ADMINS is a JSON array of email strings. PIC_MAPPINGS is a JSON array of
+// {country, email, outlet} objects. Properties Service is scoped to this script
+// project itself - it isn't a Drive file, has no "share" concept, and is read the
+// same way regardless of who is viewing the web app, so this data can never be
+// found in anyone's Drive no matter what.
+
+function getAdmins_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('ADMINS');
+  return raw ? JSON.parse(raw) : [];
+}
+
+function saveAdmins_(admins) {
+  PropertiesService.getScriptProperties().setProperty('ADMINS', JSON.stringify(admins));
+}
+
+function getMappings_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('PIC_MAPPINGS');
+  return raw ? JSON.parse(raw) : [];
+}
+
+function saveMappings_(mappings) {
+  PropertiesService.getScriptProperties().setProperty('PIC_MAPPINGS', JSON.stringify(mappings));
+}
+
 function isAdmin_(email) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ADMIN_SHEET);
-  if (!sheet) return false;
-  var values = sheet.getDataRange().getValues();
-  var target = email.trim().toLowerCase();
-  for (var i = 1; i < values.length; i++) {
-    if (String(values[i][0] || '').trim().toLowerCase() === target) return true;
-  }
-  return false;
+  var target = String(email || '').trim().toLowerCase();
+  return getAdmins_().some(function (a) { return String(a || '').trim().toLowerCase() === target; });
 }
 
-function getOutletsForEmail_(email, mappingSheetName) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(mappingSheetName);
-  if (!sheet) return [];
-  var values = sheet.getDataRange().getValues();
-  var outlets = [];
-  var target = email.trim().toLowerCase();
-  for (var i = 1; i < values.length; i++) {
-    var rowEmail = String(values[i][0] || '').trim().toLowerCase();
-    var rowOutlet = String(values[i][1] || '').trim();
-    if (rowEmail === target && rowOutlet) {
-      outlets.push(rowOutlet);
-    }
-  }
-  return outlets;
+function getOutletsForEmail_(email, countryCode) {
+  var target = String(email || '').trim().toLowerCase();
+  return getMappings_()
+    .filter(function (m) { return m.country === countryCode && String(m.email || '').trim().toLowerCase() === target; })
+    .map(function (m) { return m.outlet; });
 }
 
-// ---- Admin: manage access (Admins + PIC_Mapping/MY_PIC_Mapping sheets), called from the client ----
-// Every function here re-checks the caller against the Admins sheet itself - the "Manage Access"
-// button is only ever rendered for admins, but google.script.run functions are callable directly
-// from a browser console by anyone signed in, so the server-side check is the real boundary.
+// ---- Admin: manage access (Admins + PIC_MAPPINGS), called from the client ----
+// Every function here re-checks the caller against the Admins list itself - the "Manage
+// Access" button is only ever rendered for admins, but google.script.run functions are
+// callable directly from a browser console by anyone signed in, so the server-side check
+// is the real boundary.
 
 function requireAdmin_() {
   var email = Session.getActiveUser().getEmail();
@@ -223,108 +232,33 @@ function isValidEmail_(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
-// The web app runs "as the user accessing it," so a PIC needs their own Viewer access to this
-// Sheet or every request they make fails with a permission error before it ever reaches doGet.
-// Manage Access grants/revokes that Viewer access automatically so admins never have to open
-// the Sheet's own Share dialog. Best-effort: a Drive sharing hiccup shouldn't block the
-// Admins/PIC_Mapping row write, since that row is the real source of truth for access.
-function grantSheetAccess_(email) {
-  try {
-    SpreadsheetApp.getActiveSpreadsheet().addViewer(email);
-  } catch (e) {
-    // Ignore - e.g. inviting an address Drive can't resolve yet.
-  }
-}
-
-function revokeSheetAccessIfUnused_(email) {
-  try {
-    if (!emailHasAnyAccess_(email)) {
-      SpreadsheetApp.getActiveSpreadsheet().removeViewer(email);
-    }
-  } catch (e) {
-    // Ignore - e.g. they were never actually a Viewer (added manually as Editor, etc.).
-  }
-}
-
-function emailHasAnyAccess_(email) {
-  var target = String(email || '').trim().toLowerCase();
-  var adminSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ADMIN_SHEET);
-  if (adminSheet) {
-    var adminValues = adminSheet.getDataRange().getValues();
-    for (var i = 1; i < adminValues.length; i++) {
-      if (String(adminValues[i][0] || '').trim().toLowerCase() === target) return true;
-    }
-  }
-  return COUNTRIES.some(function (c) {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(c.mappingSheet);
-    if (!sheet) return false;
-    var values = sheet.getDataRange().getValues();
-    for (var j = 1; j < values.length; j++) {
-      if (String(values[j][0] || '').trim().toLowerCase() === target) return true;
-    }
-    return false;
-  });
-}
-
 function listAccess() {
   requireAdmin_();
-  var admins = [];
-  var adminSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ADMIN_SHEET);
-  if (adminSheet) {
-    var adminValues = adminSheet.getDataRange().getValues();
-    for (var i = 1; i < adminValues.length; i++) {
-      var a = String(adminValues[i][0] || '').trim();
-      if (a) admins.push(a);
-    }
-  }
-  var mappings = [];
-  COUNTRIES.forEach(function (c) {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(c.mappingSheet);
-    if (!sheet) return;
-    var values = sheet.getDataRange().getValues();
-    for (var j = 1; j < values.length; j++) {
-      var email = String(values[j][0] || '').trim();
-      var outlet = String(values[j][1] || '').trim();
-      if (email && outlet) mappings.push({ country: c.code, email: email, outlet: outlet });
-    }
-  });
-  return { admins: admins, mappings: mappings };
+  return { admins: getAdmins_(), mappings: getMappings_() };
 }
 
 function addAdmin(email) {
   requireAdmin_();
   email = String(email || '').trim();
   if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ADMIN_SHEET);
-  if (!sheet) throw new Error('Admins sheet not found.');
-  var values = sheet.getDataRange().getValues();
-  for (var i = 1; i < values.length; i++) {
-    if (String(values[i][0] || '').trim().toLowerCase() === email.toLowerCase()) {
-      throw new Error(email + ' is already an admin.');
-    }
+  var admins = getAdmins_();
+  var target = email.toLowerCase();
+  if (admins.some(function (a) { return a.toLowerCase() === target; })) {
+    throw new Error(email + ' is already an admin.');
   }
-  sheet.appendRow([email]);
-  grantSheetAccess_(email);
+  admins.push(email);
+  saveAdmins_(admins);
   return listAccess();
 }
 
 function removeAdmin(email) {
   requireAdmin_();
-  email = String(email || '').trim().toLowerCase();
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ADMIN_SHEET);
-  if (!sheet) throw new Error('Admins sheet not found.');
-  var values = sheet.getDataRange().getValues();
-  var remaining = 0;
-  for (var i = 1; i < values.length; i++) {
-    if (String(values[i][0] || '').trim()) remaining++;
-  }
-  if (remaining <= 1) throw new Error('Cannot remove the last admin.');
-  for (var r = values.length - 1; r >= 1; r--) {
-    if (String(values[r][0] || '').trim().toLowerCase() === email) {
-      sheet.deleteRow(r + 1);
-    }
-  }
-  revokeSheetAccessIfUnused_(email);
+  var target = String(email || '').trim().toLowerCase();
+  var admins = getAdmins_();
+  var remaining = admins.filter(function (a) { return a.toLowerCase() !== target; });
+  if (remaining.length === admins.length) return listAccess();
+  if (remaining.length === 0) throw new Error('Cannot remove the last admin.');
+  saveAdmins_(remaining);
   return listAccess();
 }
 
@@ -336,36 +270,26 @@ function addPicMapping(countryCode, email, outlet) {
   outlet = String(outlet || '').trim();
   if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
   if (!outlet) throw new Error('Choose an outlet.');
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(country.mappingSheet);
-  if (!sheet) throw new Error(country.mappingSheet + ' sheet not found.');
-  var values = sheet.getDataRange().getValues();
-  for (var i = 1; i < values.length; i++) {
-    if (String(values[i][0] || '').trim().toLowerCase() === email.toLowerCase() &&
-        String(values[i][1] || '').trim().toLowerCase() === outlet.toLowerCase()) {
-      throw new Error(email + ' already has access to ' + outlet + '.');
-    }
-  }
-  sheet.appendRow([email, outlet]);
-  grantSheetAccess_(email);
+  var mappings = getMappings_();
+  var emailLower = email.toLowerCase();
+  var outletLower = outlet.toLowerCase();
+  var exists = mappings.some(function (m) {
+    return m.country === countryCode && m.email.toLowerCase() === emailLower && m.outlet.toLowerCase() === outletLower;
+  });
+  if (exists) throw new Error(email + ' already has access to ' + outlet + '.');
+  mappings.push({ country: countryCode, email: email, outlet: outlet });
+  saveMappings_(mappings);
   return listAccess();
 }
 
 function removePicMapping(countryCode, email, outlet) {
   requireAdmin_();
-  var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
-  if (!country) throw new Error('Unknown country.');
-  email = String(email || '').trim().toLowerCase();
-  outlet = String(outlet || '').trim().toLowerCase();
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(country.mappingSheet);
-  if (!sheet) throw new Error(country.mappingSheet + ' sheet not found.');
-  var values = sheet.getDataRange().getValues();
-  for (var r = values.length - 1; r >= 1; r--) {
-    if (String(values[r][0] || '').trim().toLowerCase() === email &&
-        String(values[r][1] || '').trim().toLowerCase() === outlet) {
-      sheet.deleteRow(r + 1);
-    }
-  }
-  revokeSheetAccessIfUnused_(email);
+  var emailLower = String(email || '').trim().toLowerCase();
+  var outletLower = String(outlet || '').trim().toLowerCase();
+  var mappings = getMappings_().filter(function (m) {
+    return !(m.country === countryCode && m.email.toLowerCase() === emailLower && m.outlet.toLowerCase() === outletLower);
+  });
+  saveMappings_(mappings);
   return listAccess();
 }
 
