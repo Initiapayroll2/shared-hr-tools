@@ -29,9 +29,8 @@
  *    Viewer - read-only, no Manage Access button. Scope 'all' sees everything Admin
  *             sees; 'fnb'/'salon'/'others'/'group_management' sees only outlets tagged
  *             with that category in OUTLET_CATEGORIES. A country with none of its
- *             outlets tagged for that scope (Malaysia, currently - no category data
- *             exists for it yet) simply doesn't show up for that Viewer, rather than
- *             showing it unfiltered.
+ *             outlets tagged for that scope simply doesn't show up for that Viewer,
+ *             rather than showing it unfiltered.
  *    PIC    - sees only their explicitly assigned outlet(s), as before.
  */
 
@@ -86,8 +85,8 @@ function doGet(e) {
   } else if (viewerScope) {
     // Scoped Viewer (F&B / Salon / Others / Group Management): filter every country's
     // rows to outlets tagged with this scope's category. A country with no categorized
-    // outlets in this scope (e.g. Malaysia, which has no category data yet) simply
-    // contributes nothing - never shown unfiltered, since that would over-expose it.
+    // outlets in this scope simply contributes nothing - never shown unfiltered, since
+    // that would over-expose it.
     var categories = getOutletCategories_();
     countries = [];
     COUNTRIES.forEach(function (c) {
@@ -438,8 +437,8 @@ function renderShell_(countries, email, isAdmin, roleLabel) {
 // here, client-side, so the outlet filter re-renders instantly without a reload.
 function clientEngine_() {
   return '' +
-    'var STATUS_ORDER=["PENDING HR REVIEW","TO GENERATE LOA","LOA PENDING SIGNATURE","TO CREATE STAFFANY ACCOUNT","ONBOARDING COMPLETE","COMPLETE"];' +
-    'var STATUS_COLORS={"PENDING HR REVIEW":"#8b8f97","TO GENERATE LOA":"#7b68ee","LOA PENDING SIGNATURE":"#4a90d9","TO CREATE STAFFANY ACCOUNT":"#2bb673","ONBOARDING COMPLETE":"#1f9254","COMPLETE":"#1c1c1c"};' +
+    'var STATUS_ORDER=["PENDING HR REVIEW","TO GENERATE LOA","LOA PENDING SIGNATURE","TO CREATE STAFFANY ACCOUNT","ONBOARDING COMPLETE","COMPLETE","TO DO","APPROVED FOR LOA"];' +
+    'var STATUS_COLORS={"PENDING HR REVIEW":"#8b8f97","TO GENERATE LOA":"#7b68ee","LOA PENDING SIGNATURE":"#4a90d9","TO CREATE STAFFANY ACCOUNT":"#2bb673","ONBOARDING COMPLETE":"#1f9254","COMPLETE":"#1c1c1c","TO DO":"#8b8f97","APPROVED FOR LOA":"#e8a33d"};' +
     'var DEFAULT_COLOR="#8b8f97";' +
     'function esc(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}' +
     'function fmtDate(iso){if(!iso)return "";var d=new Date(iso);return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});}' +
