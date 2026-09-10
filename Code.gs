@@ -8,18 +8,31 @@
  * SETUP:
  * 1. Script Properties (Project Settings > Script Properties):
  *    CLICKUP_TOKEN = your ClickUp personal API token.
- *    (ADMINS and PIC_MAPPINGS properties are created/managed automatically by the
- *    in-portal "Manage Access" panel below - no manual setup needed for those.)
+ *    (ADMINS, VIEWERS and PIC_MAPPINGS are created/managed automatically by the
+ *    in-portal "Manage Access" panel below - no manual setup needed for those.
+ *    OUTLET_CATEGORIES - lowercased outlet name -> 'fnb'|'salon'|'others'|'group_management' -
+ *    is what a scoped Viewer's outlet list is filtered against; seed/update it by calling
+ *    saveOutletCategories_() once from this editor, there's no admin UI for it yet.)
  * 2. Deploy > New deployment > Web app.
  *    - Execute as: User accessing the web app
  *    - Who has access: Anyone with a Google account
- * 3. Share the deployment URL. Add each PIC/Admin via the in-portal "Manage Access"
+ * 3. Share the deployment URL. Add each PIC/Viewer/Admin via the in-portal "Manage Access"
  *    panel (Admins only). There is deliberately no Google Sheet involved anywhere in
  *    this project: who-has-access-to-what is sensitive (it shows every PIC's outlet
  *    assignment), and a Sheet is a Drive file - shareable, findable, exportable. It's
  *    stored instead in this script's own Properties Service, which isn't a Drive object
  *    at all, so there's nothing for a PIC to ever find in their Drive, regardless of any
  *    sharing setting. No PIC needs, or gets, any Drive/Sheet permission at any point.
+ *
+ * ROLES:
+ *    Admin  - sees every outlet in every country, manages Admins/Viewers/PICs.
+ *    Viewer - read-only, no Manage Access button. Scope 'all' sees everything Admin
+ *             sees; 'fnb'/'salon'/'others'/'group_management' sees only outlets tagged
+ *             with that category in OUTLET_CATEGORIES. A country with none of its
+ *             outlets tagged for that scope (Malaysia, currently - no category data
+ *             exists for it yet) simply doesn't show up for that Viewer, rather than
+ *             showing it unfiltered.
+ *    PIC    - sees only their explicitly assigned outlet(s), as before.
  */
 
 // Singapore tasks carry dedicated "Outlet"/"Role"/"Full Name" custom fields.
@@ -37,6 +50,12 @@ var COUNTRIES = [
   }
 ];
 
+// Viewer scopes: a Viewer sees outlets tagged with their scope's category, read-only.
+// 'all' bypasses categorization entirely (same outlets as Admin). The rest depend on
+// OUTLET_CATEGORIES being set per outlet - see getOutletCategories_/saveOutletCategories_.
+var VALID_SCOPES = ['all', 'fnb', 'salon', 'others', 'group_management'];
+var CATEGORY_LABELS = { all: 'All outlets', fnb: 'F&B', salon: 'Salon', others: 'Others', group_management: 'Group Management' };
+
 // Each country has its own outlet namespace - an outlet named e.g. "Modu K" in
 // Singapore is a completely different outlet from one with the same name in
 // Malaysia. So a PIC's access is always resolved within a single country's own
@@ -49,19 +68,46 @@ function doGet(e) {
   }
 
   var isAdmin = isAdmin_(email);
+  var viewerScope = isAdmin ? null : getViewerScope_(email);
+  var roleLabel = isAdmin ? 'Admin' : (viewerScope ? 'Viewer · ' + (CATEGORY_LABELS[viewerScope] || viewerScope) : 'PIC');
   var countries;
 
-  if (isAdmin) {
+  if (isAdmin || viewerScope === 'all') {
     countries = COUNTRIES.map(function (c) {
       var rows = getClickUpTasks_(c);
       return {
         code: c.code,
         label: c.label,
-        outletsLabel: c.label + ' (admin view)',
+        outletsLabel: c.label + (isAdmin ? ' (admin view)' : ' (all outlets)'),
         rows: rows,
         outlets: getOutletOptionsForCountry_(c, rows)
       };
     });
+  } else if (viewerScope) {
+    // Scoped Viewer (F&B / Salon / Others / Group Management): filter every country's
+    // rows to outlets tagged with this scope's category. A country with no categorized
+    // outlets in this scope (e.g. Malaysia, which has no category data yet) simply
+    // contributes nothing - never shown unfiltered, since that would over-expose it.
+    var categories = getOutletCategories_();
+    countries = [];
+    COUNTRIES.forEach(function (c) {
+      var rows = getClickUpTasks_(c).filter(function (t) {
+        return categories[String(t.outlet || '').trim().toLowerCase()] === viewerScope;
+      });
+      if (rows.length === 0) return;
+      countries.push({
+        code: c.code,
+        label: c.label,
+        outletsLabel: c.label + ' (' + (CATEGORY_LABELS[viewerScope] || viewerScope) + ')',
+        rows: rows,
+        outlets: uniqueOutlets_(rows)
+      });
+    });
+    if (countries.length === 0) {
+      return HtmlOutput_('No access configured',
+        '<p>No ' + escapeHtml_(CATEGORY_LABELS[viewerScope] || viewerScope) + ' outlets found for <b>' + escapeHtml_(email) + '</b> right now.</p>' +
+        '<p>Contact HR if this looks wrong.</p>');
+    }
   } else {
     countries = [];
     COUNTRIES.forEach(function (c) {
@@ -79,7 +125,7 @@ function doGet(e) {
     }
   }
 
-  return HtmlOutput_('Onboarding Status', renderShell_(countries, email, isAdmin));
+  return HtmlOutput_('Onboarding Status', renderShell_(countries, email, isAdmin, roleLabel));
 }
 
 function getClickUpTasks_(country) {
@@ -135,6 +181,13 @@ function parseTaskTitle_(name) {
 // found by parsing the titles of its own currently-fetched tasks.
 function getOutletOptionsForCountry_(country, rows) {
   if (country.outletField) return getOutletFieldOptions_(country.listId);
+  return uniqueOutlets_(rows);
+}
+
+// The distinct outlets actually present in a set of rows, sorted. Used for Malaysia's
+// outlet list (no ClickUp field to ask directly) and for a scoped Viewer's outlet list
+// (only the outlets their category-filtered rows actually touch, not every live outlet).
+function uniqueOutlets_(rows) {
   var seen = {};
   var outlets = [];
   rows.forEach(function (r) {
@@ -180,11 +233,14 @@ function getOutletFieldOptions_(listId) {
 }
 
 // ---- Access-control storage: Properties Service, deliberately not a Sheet ----
-// ADMINS is a JSON array of email strings. PIC_MAPPINGS is a JSON array of
-// {country, email, outlet} objects. Properties Service is scoped to this script
-// project itself - it isn't a Drive file, has no "share" concept, and is read the
-// same way regardless of who is viewing the web app, so this data can never be
-// found in anyone's Drive no matter what.
+// ADMINS is a JSON array of email strings. VIEWERS is a JSON array of {email, scope}
+// objects, scope being one of VALID_SCOPES. PIC_MAPPINGS is a JSON array of
+// {country, email, outlet} objects. OUTLET_CATEGORIES is a JSON object mapping a
+// lowercased outlet name to a category ('fnb' | 'salon' | 'others' | 'group_management') -
+// this is what a scoped Viewer's outlet list is filtered against. Properties Service is
+// scoped to this script project itself - it isn't a Drive file, has no "share" concept,
+// and is read the same way regardless of who is viewing the web app, so none of this can
+// ever be found in anyone's Drive no matter what.
 
 function getAdmins_() {
   var raw = PropertiesService.getScriptProperties().getProperty('ADMINS');
@@ -193,6 +249,15 @@ function getAdmins_() {
 
 function saveAdmins_(admins) {
   PropertiesService.getScriptProperties().setProperty('ADMINS', JSON.stringify(admins));
+}
+
+function getViewers_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('VIEWERS');
+  return raw ? JSON.parse(raw) : [];
+}
+
+function saveViewers_(viewers) {
+  PropertiesService.getScriptProperties().setProperty('VIEWERS', JSON.stringify(viewers));
 }
 
 function getMappings_() {
@@ -204,9 +269,24 @@ function saveMappings_(mappings) {
   PropertiesService.getScriptProperties().setProperty('PIC_MAPPINGS', JSON.stringify(mappings));
 }
 
+function getOutletCategories_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('OUTLET_CATEGORIES');
+  return raw ? JSON.parse(raw) : {};
+}
+
+function saveOutletCategories_(categories) {
+  PropertiesService.getScriptProperties().setProperty('OUTLET_CATEGORIES', JSON.stringify(categories));
+}
+
 function isAdmin_(email) {
   var target = String(email || '').trim().toLowerCase();
   return getAdmins_().some(function (a) { return String(a || '').trim().toLowerCase() === target; });
+}
+
+function getViewerScope_(email) {
+  var target = String(email || '').trim().toLowerCase();
+  var match = getViewers_().filter(function (v) { return String(v.email || '').trim().toLowerCase() === target; })[0];
+  return match ? match.scope : null;
 }
 
 function getOutletsForEmail_(email, countryCode) {
@@ -234,7 +314,7 @@ function isValidEmail_(email) {
 
 function listAccess() {
   requireAdmin_();
-  return { admins: getAdmins_(), mappings: getMappings_() };
+  return { admins: getAdmins_(), viewers: getViewers_(), mappings: getMappings_() };
 }
 
 function addAdmin(email) {
@@ -259,6 +339,28 @@ function removeAdmin(email) {
   if (remaining.length === admins.length) return listAccess();
   if (remaining.length === 0) throw new Error('Cannot remove the last admin.');
   saveAdmins_(remaining);
+  return listAccess();
+}
+
+function addViewer(email, scope) {
+  requireAdmin_();
+  email = String(email || '').trim();
+  if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
+  if (VALID_SCOPES.indexOf(scope) === -1) throw new Error('Unknown scope.');
+  var emailLower = email.toLowerCase();
+  // Upsert: re-adding an existing Viewer just changes their scope, rather than erroring -
+  // unlike Admins/PICs, "already exists" isn't a mistake worth blocking here.
+  var viewers = getViewers_().filter(function (v) { return v.email.toLowerCase() !== emailLower; });
+  viewers.push({ email: email, scope: scope });
+  saveViewers_(viewers);
+  return listAccess();
+}
+
+function removeViewer(email) {
+  requireAdmin_();
+  var emailLower = String(email || '').trim().toLowerCase();
+  var viewers = getViewers_().filter(function (v) { return v.email.toLowerCase() !== emailLower; });
+  saveViewers_(viewers);
   return listAccess();
 }
 
@@ -295,7 +397,7 @@ function removePicMapping(countryCode, email, outlet) {
 
 // ---- Page shell: header + country toggle + filter select + empty client-rendered dashboard ----
 
-function renderShell_(countries, email, isAdmin) {
+function renderShell_(countries, email, isAdmin, roleLabel) {
   var clientCountries = countries.map(function (c) {
     var clientRows = c.rows.map(function (r) {
       return {
@@ -320,7 +422,7 @@ function renderShell_(countries, email, isAdmin) {
       '</div>' +
       '<div style="display:flex;align-items:center;gap:12px;">' +
         (isAdmin ? '<button class="manage-btn" onclick="openAccessPanel()">Manage Access</button>' : '') +
-        '<div class="muted">' + escapeHtml_(email) + '</div>' +
+        '<div class="muted">' + escapeHtml_(email) + (roleLabel ? ' · ' + escapeHtml_(roleLabel) : '') + '</div>' +
       '</div>' +
     '</div>' +
     '<div id="filter-bar"></div>' +
@@ -415,6 +517,8 @@ function clientEngine_() {
       'el.innerHTML=buildStatCards(rows)+buildOutletBreakdown(rows,selected)+buildStatusBar(rows)+buildGroupedTable(rows);' +
     '}' +
     'var LAST_ACCESS_DATA=null;' +
+    'var SCOPE_LABELS={all:"All outlets",fnb:"F&B only",salon:"Salon only",others:"Others only",group_management:"Group Management only"};' +
+    'var SCOPE_OPTIONS=Object.keys(SCOPE_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(SCOPE_LABELS[k])+"</option>";}).join("");' +
     'function openAccessPanel(){' +
       'document.getElementById("accessModal").style.display="flex";' +
       'document.getElementById("accessModalContent").innerHTML="<p class=\\"muted\\">Loading\\u2026</p>";' +
@@ -442,6 +546,16 @@ function clientEngine_() {
       '});' +
       'html+="<div class=\\"add-form\\"><input type=\\"email\\" id=\\"newAdminEmail\\" placeholder=\\"name@company.com\\"/><button class=\\"add-btn\\" onclick=\\"doAddAdmin()\\">Add admin</button></div>";' +
       'html+="<div class=\\"access-error\\" id=\\"adminError\\"></div>";' +
+      'html+="</div>";' +
+      'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">Viewers (read-only)</div>";' +
+      'data.viewers.forEach(function(v,i){' +
+        'html+="<div class=\\"access-row\\"><span>"+esc(v.email)+"</span><span style=\\"display:flex;align-items:center;gap:8px;\\"><span class=\\"muted\\">"+esc(SCOPE_LABELS[v.scope]||v.scope)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveViewer("+i+")})\\">Remove</button></span></div>";' +
+      '});' +
+      'if(data.viewers.length===0)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No viewers yet.</div>";' +
+      'html+="<div class=\\"add-form\\"><input type=\\"email\\" id=\\"newViewerEmail\\" placeholder=\\"name@company.com\\"/>"+' +
+        '"<select id=\\"newViewerScope\\">"+SCOPE_OPTIONS+"</select>"+' +
+        '"<button class=\\"add-btn\\" onclick=\\"doAddViewer()\\">Add viewer</button></div>";' +
+      'html+="<div class=\\"access-error\\" id=\\"viewerError\\"></div>";' +
       'html+="</div>";' +
       'COUNTRIES.forEach(function(c){' +
         'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">"+esc(c.label)+" PICs</div>";' +
@@ -475,6 +589,22 @@ function clientEngine_() {
       'var errBox=document.getElementById("topAccessError");' +
       'if(errBox)errBox.textContent="";' +
       'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removeAdmin(email);' +
+    '}' +
+    'function doAddViewer(){' +
+      'var emailEl=document.getElementById("newViewerEmail");' +
+      'var scopeEl=document.getElementById("newViewerScope");' +
+      'var email=emailEl.value.trim();' +
+      'var scope=scopeEl.value;' +
+      'var errBox=document.getElementById("viewerError");' +
+      'if(errBox)errBox.textContent="";' +
+      'google.script.run.withSuccessHandler(function(data){emailEl.value="";renderAccessPanel(data);}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addViewer(email,scope);' +
+    '}' +
+    'function doRemoveViewer(i){' +
+      'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.viewers[i])return;' +
+      'var email=LAST_ACCESS_DATA.viewers[i].email;' +
+      'var errBox=document.getElementById("topAccessError");' +
+      'if(errBox)errBox.textContent="";' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removeViewer(email);' +
     '}' +
     'function doAddMapping(countryCode){' +
       'var emailEl=document.getElementById("newPicEmail_"+countryCode);' +
