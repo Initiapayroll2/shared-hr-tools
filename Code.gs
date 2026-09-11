@@ -8,11 +8,8 @@
  * SETUP:
  * 1. Script Properties (Project Settings > Script Properties):
  *    CLICKUP_TOKEN = your ClickUp personal API token.
- *    (ADMINS, VIEWERS and PIC_MAPPINGS are created/managed automatically by the
- *    in-portal "Manage Access" panel below - no manual setup needed for those.
- *    OUTLET_CATEGORIES - lowercased outlet name -> 'fnb'|'salon'|'others'|'group_management' -
- *    is what a scoped Viewer's outlet list is filtered against; seed/update it by calling
- *    saveOutletCategories_() once from this editor, there's no admin UI for it yet.)
+ *    (ADMINS, VIEWERS, PIC_MAPPINGS and OUTLET_CATEGORIES are all created/managed
+ *    automatically by the in-portal "Manage Access" panel below - no manual setup.)
  * 2. Deploy > New deployment > Web app.
  *    - Execute as: User accessing the web app
  *    - Who has access: Anyone with a Google account
@@ -65,6 +62,17 @@ function doGet(e) {
     return HtmlOutput_('Sign-in required', '<p>Please sign in with your Google account to view this page.</p>');
   }
 
+  try {
+    return doGetInner_(email);
+  } catch (err) {
+    if (err && err.isClickUpError) {
+      return HtmlOutput_('ClickUp unavailable', '<p>' + escapeHtml_(err.message) + '</p><p>Please try again shortly.</p>');
+    }
+    throw err;
+  }
+}
+
+function doGetInner_(email) {
   var isAdmin = isAdmin_(email);
   var viewerScope = isAdmin ? null : getViewerScope_(email);
   var roleLabel = isAdmin ? 'Admin' : (viewerScope ? 'Viewer · ' + (CATEGORY_LABELS[viewerScope] || viewerScope) : 'PIC');
@@ -90,7 +98,7 @@ function doGet(e) {
     countries = [];
     COUNTRIES.forEach(function (c) {
       var rows = getClickUpTasks_(c).filter(function (t) {
-        return categories[String(t.outlet || '').trim().toLowerCase()] === viewerScope;
+        return getOutletCategoryFor_(categories, c.code, t.outlet) === viewerScope;
       });
       if (rows.length === 0) return;
       countries.push({
@@ -126,6 +134,31 @@ function doGet(e) {
   return HtmlOutput_('Onboarding Status', renderShell_(countries, email, isAdmin, roleLabel));
 }
 
+// Wraps a ClickUp UrlFetchApp call so an expired token, rate limit or outage surfaces
+// as a ClickUpError with a friendly message instead of a raw stack trace reaching the user.
+function fetchClickUp_(url, token) {
+  var resp;
+  try {
+    resp = UrlFetchApp.fetch(url, { headers: { Authorization: token }, muteHttpExceptions: true });
+  } catch (e) {
+    throw new ClickUpError_('Could not reach ClickUp. Please try again in a moment.');
+  }
+  var code = resp.getResponseCode();
+  if (code >= 400) {
+    var message = code === 401 ? 'The ClickUp API token has expired or is invalid.' :
+      code === 429 ? 'ClickUp is rate-limiting requests right now. Please try again shortly.' :
+      'ClickUp returned an error (HTTP ' + code + ').';
+    throw new ClickUpError_(message);
+  }
+  return JSON.parse(resp.getContentText());
+}
+
+function ClickUpError_(message) {
+  this.message = message;
+  this.isClickUpError = true;
+}
+ClickUpError_.prototype = Object.create(Error.prototype);
+
 function getClickUpTasks_(country) {
   var token = PropertiesService.getScriptProperties().getProperty('CLICKUP_TOKEN');
   var tasks = [];
@@ -133,8 +166,7 @@ function getClickUpTasks_(country) {
   while (true) {
     var url = 'https://api.clickup.com/api/v2/list/' + country.listId + '/task' +
       '?include_closed=true&subtasks=true&page=' + page;
-    var resp = UrlFetchApp.fetch(url, { headers: { Authorization: token } });
-    var data = JSON.parse(resp.getContentText());
+    var data = fetchClickUp_(url, token);
     var batch = data.tasks || [];
     tasks = tasks.concat(batch);
     if (batch.length < 100 || data.last_page) break;
@@ -143,13 +175,11 @@ function getClickUpTasks_(country) {
 
   return tasks.map(function (t) {
     var statusRaw = t.status && t.status.status ? t.status.status : '';
-    var priorityRaw = t.priority && t.priority.priority ? t.priority.priority : '';
     return {
       outlet: getCustomFieldValue_(t, country.outletField),
       name: getCustomFieldValue_(t, country.fullNameField) || t.name || '',
       position: getCustomFieldValue_(t, country.roleField),
       status: statusRaw.toUpperCase(),
-      priority: priorityRaw ? priorityRaw.charAt(0).toUpperCase() + priorityRaw.slice(1) : '',
       dueDate: t.due_date ? new Date(Number(t.due_date)) : '',
       lastUpdated: t.date_updated ? new Date(Number(t.date_updated)) : ''
     };
@@ -191,8 +221,7 @@ function getCustomFieldValue_(task, fieldName) {
 function getOutletFieldOptions_(listId, fieldName) {
   var token = PropertiesService.getScriptProperties().getProperty('CLICKUP_TOKEN');
   var url = 'https://api.clickup.com/api/v2/list/' + listId + '/field';
-  var resp = UrlFetchApp.fetch(url, { headers: { Authorization: token } });
-  var data = JSON.parse(resp.getContentText());
+  var data = fetchClickUp_(url, token);
   var field = (data.fields || []).filter(function (f) { return f.name === fieldName; })[0];
   if (!field || !field.type_config || !field.type_config.options) return [];
   return field.type_config.options
@@ -205,12 +234,13 @@ function getOutletFieldOptions_(listId, fieldName) {
 // ---- Access-control storage: Properties Service, deliberately not a Sheet ----
 // ADMINS is a JSON array of email strings. VIEWERS is a JSON array of {email, scope}
 // objects, scope being one of VALID_SCOPES. PIC_MAPPINGS is a JSON array of
-// {country, email, outlet} objects. OUTLET_CATEGORIES is a JSON object mapping a
-// lowercased outlet name to a category ('fnb' | 'salon' | 'others' | 'group_management') -
-// this is what a scoped Viewer's outlet list is filtered against. Properties Service is
-// scoped to this script project itself - it isn't a Drive file, has no "share" concept,
-// and is read the same way regardless of who is viewing the web app, so none of this can
-// ever be found in anyone's Drive no matter what.
+// {country, email, outlet} objects. OUTLET_CATEGORIES is a JSON array of
+// {country, outlet, category} objects (category being one of VALID_SCOPES except 'all') -
+// this is what a scoped Viewer's outlet list is filtered against, looked up per-country via
+// getOutletCategoryFor_ so an outlet name collision between countries can never cross-tag.
+// Properties Service is scoped to this script project itself - it isn't a Drive file, has
+// no "share" concept, and is read the same way regardless of who is viewing the web app, so
+// none of this can ever be found in anyone's Drive no matter what.
 
 function getAdmins_() {
   var raw = PropertiesService.getScriptProperties().getProperty('ADMINS');
@@ -241,11 +271,21 @@ function saveMappings_(mappings) {
 
 function getOutletCategories_() {
   var raw = PropertiesService.getScriptProperties().getProperty('OUTLET_CATEGORIES');
-  return raw ? JSON.parse(raw) : {};
+  return raw ? JSON.parse(raw) : [];
 }
 
 function saveOutletCategories_(categories) {
   PropertiesService.getScriptProperties().setProperty('OUTLET_CATEGORIES', JSON.stringify(categories));
+}
+
+// Looks up an outlet's category within a single country's own namespace - the same
+// outlet name in a different country is never matched.
+function getOutletCategoryFor_(categories, countryCode, outlet) {
+  var outletLower = String(outlet || '').trim().toLowerCase();
+  var match = categories.filter(function (c) {
+    return c.country === countryCode && String(c.outlet || '').trim().toLowerCase() === outletLower;
+  })[0];
+  return match ? match.category : null;
 }
 
 function isAdmin_(email) {
@@ -284,7 +324,7 @@ function isValidEmail_(email) {
 
 function listAccess() {
   requireAdmin_();
-  return { admins: getAdmins_(), viewers: getViewers_(), mappings: getMappings_() };
+  return { admins: getAdmins_(), viewers: getViewers_(), mappings: getMappings_(), categories: getOutletCategories_() };
 }
 
 function addAdmin(email) {
@@ -362,6 +402,38 @@ function removePicMapping(countryCode, email, outlet) {
     return !(m.country === countryCode && m.email.toLowerCase() === emailLower && m.outlet.toLowerCase() === outletLower);
   });
   saveMappings_(mappings);
+  return listAccess();
+}
+
+// Categories an outlet can be tagged with. Excludes 'all' - that's a valid Viewer
+// scope (see everything unfiltered) but not a category an outlet can be tagged with.
+var VALID_CATEGORIES = VALID_SCOPES.filter(function (s) { return s !== 'all'; });
+
+function addOutletCategory(countryCode, outlet, category) {
+  requireAdmin_();
+  var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
+  if (!country) throw new Error('Unknown country.');
+  outlet = String(outlet || '').trim();
+  if (!outlet) throw new Error('Choose an outlet.');
+  if (VALID_CATEGORIES.indexOf(category) === -1) throw new Error('Unknown category.');
+  var outletLower = outlet.toLowerCase();
+  // Upsert: re-tagging an outlet just changes its category, rather than erroring -
+  // like Viewer scope, this is a normal correction, not a duplicate mistake.
+  var categories = getOutletCategories_().filter(function (c) {
+    return !(c.country === countryCode && String(c.outlet || '').trim().toLowerCase() === outletLower);
+  });
+  categories.push({ country: countryCode, outlet: outlet, category: category });
+  saveOutletCategories_(categories);
+  return listAccess();
+}
+
+function removeOutletCategory(countryCode, outlet) {
+  requireAdmin_();
+  var outletLower = String(outlet || '').trim().toLowerCase();
+  var categories = getOutletCategories_().filter(function (c) {
+    return !(c.country === countryCode && String(c.outlet || '').trim().toLowerCase() === outletLower);
+  });
+  saveOutletCategories_(categories);
   return listAccess();
 }
 
@@ -488,6 +560,8 @@ function clientEngine_() {
     'var LAST_ACCESS_DATA=null;' +
     'var SCOPE_LABELS={all:"All outlets",fnb:"F&B only",salon:"Salon only",others:"Others only",group_management:"Group Management only"};' +
     'var SCOPE_OPTIONS=Object.keys(SCOPE_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(SCOPE_LABELS[k])+"</option>";}).join("");' +
+    'var CATEGORY_LABELS={fnb:"F&B",salon:"Salon",others:"Others",group_management:"Group Management"};' +
+    'var CATEGORY_OPTIONS=Object.keys(CATEGORY_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(CATEGORY_LABELS[k])+"</option>";}).join("");' +
     'function openAccessPanel(){' +
       'document.getElementById("accessModal").style.display="flex";' +
       'document.getElementById("accessModalContent").innerHTML="<p class=\\"muted\\">Loading\\u2026</p>";' +
@@ -543,6 +617,23 @@ function clientEngine_() {
         'html+="<div class=\\"access-error\\" id=\\"mappingError_"+c.code+"\\"></div>";' +
         'html+="</div>";' +
       '});' +
+      'COUNTRIES.forEach(function(c){' +
+        'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">"+esc(c.label)+" outlet categories (for scoped Viewers)</div>";' +
+        'var any=false;' +
+        'data.categories.forEach(function(cat,idx){' +
+          'if(cat.country!==c.code)return;' +
+          'any=true;' +
+          'html+="<div class=\\"access-row\\"><span>"+esc(cat.outlet)+" \\u2192 "+esc(CATEGORY_LABELS[cat.category]||cat.category)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveCategory("+idx+")})\\">Remove</button></div>";' +
+        '});' +
+        'if(!any)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No outlets tagged yet.</div>";' +
+        'var catOutletOpts=(c.outlets||[]).map(function(o){return "<option value=\\""+esc(o)+"\\">"+esc(o)+"</option>";}).join("");' +
+        'html+="<div class=\\"add-form\\">"+' +
+          '"<select id=\\"newCatOutlet_"+c.code+"\\"><option value=\\"\\">Select outlet</option>"+catOutletOpts+"</select>"+' +
+          '"<select id=\\"newCatCategory_"+c.code+"\\">"+CATEGORY_OPTIONS+"</select>"+' +
+          '"<button class=\\"add-btn\\" onclick=\\"doAddCategory(\'"+c.code+"\')\\">Tag outlet</button></div>";' +
+        'html+="<div class=\\"access-error\\" id=\\"categoryError_"+c.code+"\\"></div>";' +
+        'html+="</div>";' +
+      '});' +
       'document.getElementById("accessModalContent").innerHTML=html;' +
     '}' +
     'function doAddAdmin(){' +
@@ -591,6 +682,23 @@ function clientEngine_() {
       'var errBox=document.getElementById("topAccessError");' +
       'if(errBox)errBox.textContent="";' +
       'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removePicMapping(m.country,m.email,m.outlet);' +
+    '}' +
+    'function doAddCategory(countryCode){' +
+      'var outletEl=document.getElementById("newCatOutlet_"+countryCode);' +
+      'var categoryEl=document.getElementById("newCatCategory_"+countryCode);' +
+      'var outlet=outletEl.value;' +
+      'var category=categoryEl.value;' +
+      'var errBox=document.getElementById("categoryError_"+countryCode);' +
+      'if(errBox)errBox.textContent="";' +
+      'if(!outlet){if(errBox)errBox.textContent="Choose an outlet.";return;}' +
+      'google.script.run.withSuccessHandler(function(data){outletEl.value="";renderAccessPanel(data);}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addOutletCategory(countryCode,outlet,category);' +
+    '}' +
+    'function doRemoveCategory(idx){' +
+      'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.categories[idx])return;' +
+      'var cat=LAST_ACCESS_DATA.categories[idx];' +
+      'var errBox=document.getElementById("topAccessError");' +
+      'if(errBox)errBox.textContent="";' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removeOutletCategory(cat.country,cat.outlet);' +
     '}';
 }
 
