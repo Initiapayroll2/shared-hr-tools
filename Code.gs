@@ -34,18 +34,17 @@
  *    PIC    - sees only their explicitly assigned outlet(s), as before.
  */
 
-// Singapore tasks carry dedicated "Outlet"/"Role"/"Full Name" custom fields.
-// Malaysia tasks don't have an Outlet or Role field at all - that info is only
-// encoded in the task title itself, formatted "PT-<Full Name>-<Outlet>-<Position>",
-// so outletFromTitle:true switches getClickUpTasks_ over to parsing the title instead.
+// Each country's Outlet/Position/Full Name come from its own ClickUp custom fields -
+// SG's are named "Outlet"/"Role"/"Full Name", MY's are named "Assigned Outlet"/
+// "Official Part-time Position"/"Full Name (as per NRIC/ID)".
 var COUNTRIES = [
   {
     code: 'SG', label: 'Singapore', listId: '901819849781',
-    outletFromTitle: false, fullNameField: 'Full Name', outletField: 'Outlet', roleField: 'Role', startDateField: 'Proposed Start Date'
+    fullNameField: 'Full Name', outletField: 'Outlet', roleField: 'Role'
   },
   {
     code: 'MY', label: 'Malaysia', listId: '901819757280',
-    outletFromTitle: true, fullNameField: 'Full Name (as per NRIC/ID)', outletField: null, roleField: null, startDateField: 'PT Start Date'
+    fullNameField: 'Full Name (as per NRIC/ID)', outletField: 'Assigned Outlet', roleField: 'Official Part-time Position'
   }
 ];
 
@@ -79,7 +78,7 @@ function doGet(e) {
         label: c.label,
         outletsLabel: c.label + (isAdmin ? ' (admin view)' : ' (all outlets)'),
         rows: rows,
-        outlets: getOutletOptionsForCountry_(c, rows)
+        outlets: getOutletOptionsForCountry_(c)
       };
     });
   } else if (viewerScope) {
@@ -145,47 +144,27 @@ function getClickUpTasks_(country) {
   return tasks.map(function (t) {
     var statusRaw = t.status && t.status.status ? t.status.status : '';
     var priorityRaw = t.priority && t.priority.priority ? t.priority.priority : '';
-    var titleParts = country.outletFromTitle ? parseTaskTitle_(t.name) : null;
-    var fullName = getCustomFieldValue_(t, country.fullNameField) || (titleParts && titleParts.fullName) || t.name || '';
     return {
-      outlet: titleParts ? titleParts.outlet : getCustomFieldValue_(t, country.outletField),
-      name: fullName,
-      position: titleParts ? titleParts.position : getCustomFieldValue_(t, country.roleField),
+      outlet: getCustomFieldValue_(t, country.outletField),
+      name: getCustomFieldValue_(t, country.fullNameField) || t.name || '',
+      position: getCustomFieldValue_(t, country.roleField),
       status: statusRaw.toUpperCase(),
       priority: priorityRaw ? priorityRaw.charAt(0).toUpperCase() + priorityRaw.slice(1) : '',
-      startDate: getCustomFieldDate_(t, country.startDateField),
       dueDate: t.due_date ? new Date(Number(t.due_date)) : '',
       lastUpdated: t.date_updated ? new Date(Number(t.date_updated)) : ''
     };
   });
 }
 
-// Malaysia task titles look like "PT-Muhammad Alif Hakimi Bin Mohd Saadon - Modu KLGCC- Service Crew"
-// i.e. "PT-<Full Name>-<Outlet>-<Position>", with inconsistent spacing around the dashes.
-// Splits on "-": the first chunk must be "PT", the last chunk is the position, the
-// second chunk is the name, and everything in between (rejoined) is the outlet -
-// this tolerates an outlet name that itself contains a dash (e.g. "Modu Samgyetang (TRX)").
-function parseTaskTitle_(name) {
-  var parts = String(name || '').split('-');
-  if (parts.length < 4 || !/^pt$/i.test((parts[0] || '').trim())) return null;
-  return {
-    fullName: parts[1].trim(),
-    outlet: parts.slice(2, parts.length - 1).join('-').trim(),
-    position: parts[parts.length - 1].trim()
-  };
+// Each country's Outlet dropdown options come from its own ClickUp field definition
+// itself (auto-syncs as outlets are added/removed in ClickUp, no code change needed).
+function getOutletOptionsForCountry_(country) {
+  return getOutletFieldOptions_(country.listId, country.outletField);
 }
 
-// Singapore's Outlet options come from the ClickUp field definition itself (auto-syncs).
-// Malaysia has no such field, so its outlet list is instead the unique set of outlets
-// found by parsing the titles of its own currently-fetched tasks.
-function getOutletOptionsForCountry_(country, rows) {
-  if (country.outletField) return getOutletFieldOptions_(country.listId);
-  return uniqueOutlets_(rows);
-}
-
-// The distinct outlets actually present in a set of rows, sorted. Used for Malaysia's
-// outlet list (no ClickUp field to ask directly) and for a scoped Viewer's outlet list
-// (only the outlets their category-filtered rows actually touch, not every live outlet).
+// The distinct outlets actually present in a set of rows, sorted. Used for a scoped
+// Viewer's outlet list (only the outlets their category-filtered rows actually touch,
+// not every live outlet).
 function uniqueOutlets_(rows) {
   var seen = {};
   var outlets = [];
@@ -209,20 +188,12 @@ function getCustomFieldValue_(task, fieldName) {
   return String(field.value);
 }
 
-function getCustomFieldDate_(task, fieldName) {
-  var field = (task.custom_fields || []).filter(function (f) { return f.name === fieldName; })[0];
-  if (!field || field.value === undefined || field.value === null || field.value === '') return '';
-  return new Date(Number(field.value));
-}
-
-// All Outlet dropdown options as defined on the ClickUp list itself - auto-syncs
-// as outlets are added/removed in ClickUp, no code change needed.
-function getOutletFieldOptions_(listId) {
+function getOutletFieldOptions_(listId, fieldName) {
   var token = PropertiesService.getScriptProperties().getProperty('CLICKUP_TOKEN');
   var url = 'https://api.clickup.com/api/v2/list/' + listId + '/field';
   var resp = UrlFetchApp.fetch(url, { headers: { Authorization: token } });
   var data = JSON.parse(resp.getContentText());
-  var field = (data.fields || []).filter(function (f) { return f.name === 'Outlet'; })[0];
+  var field = (data.fields || []).filter(function (f) { return f.name === fieldName; })[0];
   if (!field || !field.type_config || !field.type_config.options) return [];
   return field.type_config.options
     .slice()
@@ -404,7 +375,6 @@ function renderShell_(countries, email, isAdmin, roleLabel) {
         name: r.name,
         position: r.position,
         status: r.status,
-        startDate: r.startDate instanceof Date ? r.startDate.toISOString() : null,
         dueDate: r.dueDate instanceof Date ? r.dueDate.toISOString() : null,
         lastUpdated: r.lastUpdated instanceof Date ? r.lastUpdated.toISOString() : null
       };
@@ -447,7 +417,7 @@ function clientEngine_() {
     'function buildStatCards(rows){' +
       'var now=new Date();var mThis=mondayOf(now);var mNext=new Date(mThis);mNext.setDate(mThis.getDate()+7);var mAfter=new Date(mThis);mAfter.setDate(mThis.getDate()+14);' +
       'var thisWeek=0,nextWeek=0;' +
-      'rows.forEach(function(r){if(!r.startDate)return;var d=new Date(r.startDate);if(d>=mThis&&d<mNext)thisWeek++;else if(d>=mNext&&d<mAfter)nextWeek++;});' +
+      'rows.forEach(function(r){if(!r.dueDate)return;var d=new Date(r.dueDate);if(d>=mThis&&d<mNext)thisWeek++;else if(d>=mNext&&d<mAfter)nextWeek++;});' +
       'return "<div class=\\"stat-row\\">"+statCard(rows.length,"Total onboarding")+statCard(thisWeek,"Joining this week")+statCard(nextWeek,"Joining next week")+"</div>";' +
     '}' +
     'function buildOutletBreakdown(rows,selected){' +
@@ -476,12 +446,12 @@ function clientEngine_() {
       'statusOrder.forEach(function(status){' +
         'var members=groups[status];if(!members||members.length===0)return;' +
         'var color=STATUS_COLORS[status]||DEFAULT_COLOR;' +
-        'body+="<tr class=\\"group-header\\"><td colspan=\\"6\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
+        'body+="<tr class=\\"group-header\\"><td colspan=\\"5\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
         'members.forEach(function(r){' +
-          'body+="<tr><td>"+esc(r.outlet)+"</td><td>"+esc(r.name)+"</td><td>"+esc(r.position)+"</td><td>"+esc(fmtDate(r.startDate))+"</td><td>"+esc(fmtDate(r.dueDate))+"</td><td class=\\"muted\\">"+esc(fmtDate(r.lastUpdated))+"</td></tr>";' +
+          'body+="<tr><td>"+esc(r.outlet)+"</td><td>"+esc(r.name)+"</td><td>"+esc(r.position)+"</td><td>"+esc(fmtDate(r.dueDate))+"</td><td class=\\"muted\\">"+esc(fmtDate(r.lastUpdated))+"</td></tr>";' +
         '});' +
       '});' +
-      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Outlet</th><th>Employee</th><th>Position</th><th>Start Date</th><th>Expected Join Date</th><th>Last Updated</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
+      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Outlet</th><th>Employee</th><th>Position</th><th>Expected Join Date</th><th>Last Updated</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
     '}' +
     'function emptyState(selected){' +
       'var who=selected?("<b>"+esc(selected)+"</b>"):"any outlet";' +
