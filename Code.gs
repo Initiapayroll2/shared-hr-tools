@@ -66,7 +66,11 @@ function doGet(e) {
     return doGetInner_(email);
   } catch (err) {
     if (err && err.isClickUpError) {
-      return HtmlOutput_('ClickUp unavailable', '<p>' + escapeHtml_(err.message) + '</p><p>Please try again shortly.</p>');
+      Logger.log('ClickUp fetch failed for ' + email + ': ' + err.message + (err.detail ? ' | ' + err.detail : ''));
+      return HtmlOutput_('ClickUp unavailable',
+        '<p>' + escapeHtml_(err.message) + '</p>' +
+        (err.detail ? '<p class="muted">' + escapeHtml_(err.detail) + '</p>' : '') +
+        '<p>Please try again shortly.</p>');
     }
     throw err;
   }
@@ -141,20 +145,21 @@ function fetchClickUp_(url, token) {
   try {
     resp = UrlFetchApp.fetch(url, { headers: { Authorization: token }, muteHttpExceptions: true });
   } catch (e) {
-    throw new ClickUpError_('Could not reach ClickUp. Please try again in a moment.');
+    throw new ClickUpError_('Could not reach ClickUp. Please try again in a moment.', e.toString());
   }
   var code = resp.getResponseCode();
   if (code >= 400) {
     var message = code === 401 ? 'The ClickUp API token has expired or is invalid.' :
       code === 429 ? 'ClickUp is rate-limiting requests right now. Please try again shortly.' :
       'ClickUp returned an error (HTTP ' + code + ').';
-    throw new ClickUpError_(message);
+    throw new ClickUpError_(message, 'HTTP ' + code + ': ' + resp.getContentText().slice(0, 300));
   }
   return JSON.parse(resp.getContentText());
 }
 
-function ClickUpError_(message) {
+function ClickUpError_(message, detail) {
   this.message = message;
+  this.detail = detail || '';
   this.isClickUpError = true;
 }
 ClickUpError_.prototype = Object.create(Error.prototype);
