@@ -49,8 +49,8 @@
  *
  * ROLES:
  *    Super Admin - sees every outlet in every country. Only role that can manage
- *                  Admins/Viewers, and the only one that can reach the separate
- *                  "Manage Outlet Categories" page (?page=outlets).
+ *                  Admins/Viewers, and the only one who can open the separate
+ *                  "Manage Outlet Categories" panel.
  *    SG/MY Admin - a country-scoped Admin: sees and manages PICs for their own
  *                  country only. Cannot see the other country, Admins, Viewers, or
  *                  outlet categories - "Manage Access" for them shows just their
@@ -102,9 +102,6 @@ function doGet(e) {
   }
 
   try {
-    if (e && e.parameter && e.parameter.page === 'outlets') {
-      return doGetOutletsPage_(email);
-    }
     return doGetInner_(email);
   } catch (err) {
     if (err && err.isClickUpError) {
@@ -124,7 +121,7 @@ function doGetInner_(email) {
   var viewerScope = isAdmin ? null : getViewerScope_(email);
   var roleLabel = adminScope ? ADMIN_ROLE_LABELS[adminScope]
     : (viewerScope === 'all' ? 'Super Viewer'
-    : (viewerScope ? 'Viewer · ' + (CATEGORY_LABELS[viewerScope] || viewerScope) : 'PIC'));
+    : (viewerScope ? 'Viewer \u00B7 ' + (CATEGORY_LABELS[viewerScope] || viewerScope) : 'PIC'));
   var countries;
 
   if (adminScope === 'super' || viewerScope === 'all') {
@@ -501,8 +498,8 @@ function removePicMapping(countryCode, email, outlet) {
 // scope (see everything unfiltered) but not a category an outlet can be tagged with.
 var VALID_CATEGORIES = VALID_SCOPES.filter(function (s) { return s !== 'all'; });
 
-// Read by the separate Manage Outlet Categories page (?page=outlets) - Super Admin
-// only, unlike listAccess which any Admin can call.
+// Read by the separate Manage Outlet Categories panel - Super Admin only, unlike
+// listAccess which any Admin can call.
 function listOutletCategories() {
   requireSuperAdmin_();
   return {
@@ -541,73 +538,6 @@ function removeOutletCategory(countryCode, outlet) {
   return listAccess();
 }
 
-// ---- Manage Outlet Categories: separate, Super-Admin-only page (?page=outlets) ----
-// Split out from the main dashboard's "Manage Access" panel because tagging an
-// outlet's category is a slow-changing taxonomy decision, not day-to-day PIC access -
-// SG/MY Admins have no reason to see or touch it, so it lives at its own URL instead
-// of inside the modal every Admin type could otherwise open.
-
-function doGetOutletsPage_(email) {
-  if (!isSuperAdmin_(email)) {
-    return HtmlOutput_('Not authorized', '<p>Only a Super Admin can manage outlet categories.</p><p><a href="?">Back to dashboard</a></p>');
-  }
-  return HtmlOutput_('Manage Outlet Categories', renderOutletsPageShell_());
-}
-
-function renderOutletsPageShell_() {
-  return '' +
-    '<div class="header"><div><h1>Manage Outlet Categories</h1>' +
-    '<div class="muted">Super Admin only &middot; <a href="?">Back to dashboard</a></div></div></div>' +
-    '<div id="categoriesBody"><p class="muted">Loading&hellip;</p></div>' +
-    '<script>' + outletsPageClientEngine_() + '\nloadCategories();\n<\/script>';
-}
-
-function outletsPageClientEngine_() {
-  return '' +
-    'function esc(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}' +
-    'var CATEGORY_LABELS={fnb:"F&B",salon:"Salon",others:"Others",group_management:"Group Management"};' +
-    'var CATEGORY_OPTIONS=Object.keys(CATEGORY_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(CATEGORY_LABELS[k])+"</option>";}).join("");' +
-    'var LAST_DATA=null;' +
-    'function armConfirm(btn,onConfirm){btn.textContent="Click again to confirm";btn.className="remove-btn confirming";btn.onclick=onConfirm;}' +
-    'function loadCategories(){google.script.run.withSuccessHandler(render).withFailureHandler(fail).listOutletCategories();}' +
-    'function fail(err){document.getElementById("categoriesBody").innerHTML="<div class=\\"access-error\\">"+esc(err&&err.message?err.message:String(err))+"</div>";}' +
-    'function render(data){' +
-      'LAST_DATA=data;' +
-      'var html="";' +
-      'data.countries.forEach(function(c){' +
-        'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">"+esc(c.label)+" outlet categories</div>";' +
-        'var any=false;' +
-        'data.categories.forEach(function(cat,idx){' +
-          'if(cat.country!==c.code)return;' +
-          'any=true;' +
-          'html+="<div class=\\"access-row\\"><span>"+esc(cat.outlet)+" \\u2192 "+esc(CATEGORY_LABELS[cat.category]||cat.category)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemove("+idx+")})\\">Remove</button></div>";' +
-        '});' +
-        'if(!any)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No outlets tagged yet.</div>";' +
-        'var opts=(c.outlets||[]).map(function(o){return "<option value=\\""+esc(o)+"\\">"+esc(o)+"</option>";}).join("");' +
-        'html+="<div class=\\"add-form\\">"+' +
-          '"<select id=\\"catOutlet_"+c.code+"\\"><option value=\\"\\">Select outlet</option>"+opts+"</select>"+' +
-          '"<select id=\\"catCategory_"+c.code+"\\">"+CATEGORY_OPTIONS+"</select>"+' +
-          '"<button class=\\"add-btn\\" onclick=\\"doAdd(\'"+c.code+"\')\\">Tag outlet</button></div>";' +
-        'html+="<div class=\\"access-error\\" id=\\"catError_"+c.code+"\\"></div>";' +
-        'html+="</div>";' +
-      '});' +
-      'document.getElementById("categoriesBody").innerHTML=html;' +
-    '}' +
-    'function doAdd(countryCode){' +
-      'var outletEl=document.getElementById("catOutlet_"+countryCode);' +
-      'var categoryEl=document.getElementById("catCategory_"+countryCode);' +
-      'var outlet=outletEl.value;var category=categoryEl.value;' +
-      'var errBox=document.getElementById("catError_"+countryCode);if(errBox)errBox.textContent="";' +
-      'if(!outlet){if(errBox)errBox.textContent="Choose an outlet.";return;}' +
-      'google.script.run.withSuccessHandler(function(){loadCategories();}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addOutletCategory(countryCode,outlet,category);' +
-    '}' +
-    'function doRemove(idx){' +
-      'if(!LAST_DATA||!LAST_DATA.categories[idx])return;' +
-      'var cat=LAST_DATA.categories[idx];' +
-      'google.script.run.withSuccessHandler(function(){loadCategories();}).withFailureHandler(function(err){alert(err&&err.message?err.message:String(err));}).removeOutletCategory(cat.country,cat.outlet);' +
-    '}';
-}
-
 // ---- Page shell: header + country toggle + filter select + empty client-rendered dashboard ----
 
 function renderShell_(countries, email, isAdmin, roleLabel, lastSynced) {
@@ -635,17 +565,18 @@ function renderShell_(countries, email, isAdmin, roleLabel, lastSynced) {
       '</div>' +
       '<div style="display:flex;align-items:center;gap:12px;">' +
         (isAdmin ? '<button class="manage-btn" onclick="openAccessPanel()">Manage Access</button>' : '') +
-        '<div class="muted">' + escapeHtml_(email) + (roleLabel ? ' · ' + escapeHtml_(roleLabel) : '') + '</div>' +
+        '<div class="muted">' + escapeHtml_(email) + (roleLabel ? ' \u00B7 ' + escapeHtml_(roleLabel) : '') + '</div>' +
       '</div>' +
     '</div>' +
     '<div id="filter-bar"></div>' +
     '<div id="dashboard-body"></div>' +
     '<div id="accessModal" class="modal-overlay" style="display:none;"><div class="modal" id="accessModalContent"></div></div>' +
+    '<div id="categoriesModal" class="modal-overlay" style="display:none;"><div class="modal" id="categoriesModalContent"></div></div>' +
     '<script>' + clientEngine_() +
       '\nvar COUNTRIES=' + countriesJson + ';' +
       '\nvar CURRENT=COUNTRIES[0].code;' +
       '\nvar LAST_SYNCED=' + JSON.stringify(lastSynced || null) + ';' +
-      '\ndocument.getElementById("syncLabel").textContent="Refreshes automatically every minute"+(LAST_SYNCED?(" · Last updated "+fmtTime(LAST_SYNCED)):"");' +
+      '\ndocument.getElementById("syncLabel").textContent="Refreshes automatically every minute"+(LAST_SYNCED?(" \u00B7 Last updated "+fmtTime(LAST_SYNCED)):"");' +
       '\ninitFilterBar();\nrender("");\n<\/script>';
 }
 
@@ -797,7 +728,7 @@ function clientEngine_() {
         'html+="</div>";' +
       '});' +
       'if(data.scope==="super"){' +
-        'html+="<div class=\\"access-section\\"><a href=\\"?page=outlets\\" target=\\"_blank\\">Manage Outlet Categories \\u2192</a></div>";' +
+        'html+="<div class=\\"access-section\\"><button class=\\"manage-btn\\" onclick=\\"openCategoriesPanel()\\">Manage Outlet Categories \\u2192</button></div>";' +
       '}' +
       'document.getElementById("accessModalContent").innerHTML=html;' +
     '}' +
@@ -849,6 +780,61 @@ function clientEngine_() {
       'var errBox=document.getElementById("topAccessError");' +
       'if(errBox)errBox.textContent="";' +
       'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removePicMapping(m.country,m.email,m.outlet);' +
+    '}' +
+    'var LAST_CATEGORY_DATA=null;' +
+    'var OUTLET_CATEGORY_LABELS={fnb:"F&B",salon:"Salon",others:"Others",group_management:"Group Management"};' +
+    'var OUTLET_CATEGORY_OPTIONS=Object.keys(OUTLET_CATEGORY_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(OUTLET_CATEGORY_LABELS[k])+"</option>";}).join("");' +
+    'function openCategoriesPanel(){' +
+      'document.getElementById("categoriesModal").style.display="flex";' +
+      'document.getElementById("categoriesModalContent").innerHTML="<p class=\\"muted\\">Loading\\u2026</p>";' +
+      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(categoriesPanelError).listOutletCategories();' +
+    '}' +
+    'function closeCategoriesPanel(){document.getElementById("categoriesModal").style.display="none";}' +
+    'function categoriesPanelError(err){' +
+      'var msg=err&&err.message?err.message:String(err);' +
+      'var box=document.getElementById("categoriesModalContent");' +
+      'if(box)box.innerHTML="<button class=\\"modal-close\\" onclick=\\"closeCategoriesPanel()\\">&times;</button><h2>Manage Outlet Categories</h2><div class=\\"access-error\\">"+esc(msg)+"</div>";' +
+    '}' +
+    'function renderCategoriesPanel(data){' +
+      'LAST_CATEGORY_DATA=data;' +
+      'var html="<button class=\\"modal-close\\" onclick=\\"closeCategoriesPanel()\\">&times;</button>";' +
+      'html+="<h2>Manage Outlet Categories</h2><div class=\\"muted\\" style=\\"margin-bottom:8px;\\">Super Admin only \\u00b7 used to filter what scoped Viewers see.</div>";' +
+      'html+="<div class=\\"access-error\\" id=\\"topCategoryError\\"></div>";' +
+      'data.countries.forEach(function(c){' +
+        'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">"+esc(c.label)+" outlet categories</div>";' +
+        'var any=false;' +
+        'data.categories.forEach(function(cat,idx){' +
+          'if(cat.country!==c.code)return;' +
+          'any=true;' +
+          'html+="<div class=\\"access-row\\"><span>"+esc(cat.outlet)+" \\u2192 "+esc(OUTLET_CATEGORY_LABELS[cat.category]||cat.category)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveCategory("+idx+")})\\">Remove</button></div>";' +
+        '});' +
+        'if(!any)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No outlets tagged yet.</div>";' +
+        'var opts=(c.outlets||[]).map(function(o){return "<option value=\\""+esc(o)+"\\">"+esc(o)+"</option>";}).join("");' +
+        'html+="<div class=\\"add-form\\">"+' +
+          '"<select id=\\"newCatOutlet_"+c.code+"\\"><option value=\\"\\">Select outlet</option>"+opts+"</select>"+' +
+          '"<select id=\\"newCatCategory_"+c.code+"\\">"+OUTLET_CATEGORY_OPTIONS+"</select>"+' +
+          '"<button class=\\"add-btn\\" onclick=\\"doAddCategory(\'"+c.code+"\')\\">Tag outlet</button></div>";' +
+        'html+="<div class=\\"access-error\\" id=\\"categoryError_"+c.code+"\\"></div>";' +
+        'html+="</div>";' +
+      '});' +
+      'document.getElementById("categoriesModalContent").innerHTML=html;' +
+    '}' +
+    'function doAddCategory(countryCode){' +
+      'var outletEl=document.getElementById("newCatOutlet_"+countryCode);' +
+      'var categoryEl=document.getElementById("newCatCategory_"+countryCode);' +
+      'var outlet=outletEl.value;' +
+      'var category=categoryEl.value;' +
+      'var errBox=document.getElementById("categoryError_"+countryCode);' +
+      'if(errBox)errBox.textContent="";' +
+      'if(!outlet){if(errBox)errBox.textContent="Choose an outlet.";return;}' +
+      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addOutletCategory(countryCode,outlet,category);' +
+    '}' +
+    'function doRemoveCategory(idx){' +
+      'if(!LAST_CATEGORY_DATA||!LAST_CATEGORY_DATA.categories[idx])return;' +
+      'var cat=LAST_CATEGORY_DATA.categories[idx];' +
+      'var errBox=document.getElementById("topCategoryError");' +
+      'if(errBox)errBox.textContent="";' +
+      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removeOutletCategory(cat.country,cat.outlet);' +
     '}';
 }
 
