@@ -827,14 +827,19 @@ function clientEngine_() {
       'var errBox=document.getElementById("categoryError_"+countryCode);' +
       'if(errBox)errBox.textContent="";' +
       'if(!outlet){if(errBox)errBox.textContent="Choose an outlet.";return;}' +
-      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addOutletCategory(countryCode,outlet,category);' +
+      'var prevData=LAST_CATEGORY_DATA;' +
+      'var optimistic=prevData.categories.filter(function(c){return !(c.country===countryCode&&c.outlet===outlet);});' +
+      'optimistic.push({country:countryCode,outlet:outlet,category:category});' +
+      'renderCategoriesPanel({countries:prevData.countries,categories:optimistic});' +
+      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){renderCategoriesPanel(prevData);var e=document.getElementById("categoryError_"+countryCode);if(e)e.textContent=err&&err.message?err.message:String(err);}).addOutletCategory(countryCode,outlet,category);' +
     '}' +
     'function doRemoveCategory(idx){' +
       'if(!LAST_CATEGORY_DATA||!LAST_CATEGORY_DATA.categories[idx])return;' +
       'var cat=LAST_CATEGORY_DATA.categories[idx];' +
-      'var errBox=document.getElementById("topCategoryError");' +
-      'if(errBox)errBox.textContent="";' +
-      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removeOutletCategory(cat.country,cat.outlet);' +
+      'var prevData=LAST_CATEGORY_DATA;' +
+      'var optimistic=prevData.categories.filter(function(c,i){return i!==idx;});' +
+      'renderCategoriesPanel({countries:prevData.countries,categories:optimistic});' +
+      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){renderCategoriesPanel(prevData);var e=document.getElementById("topCategoryError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeOutletCategory(cat.country,cat.outlet);' +
     '}';
 }
 
