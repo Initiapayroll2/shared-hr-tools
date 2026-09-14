@@ -1,7 +1,16 @@
 /**
  * F&B PT Onboarding Portal
  * Shows each PIC only the onboarding status rows for their own outlet(s).
- * Pulls live directly from the ClickUp API on every page load (no sync step).
+ * ClickUp is polled in the background every 5 minutes by a time-driven trigger
+ * (refreshClickUpCache_, installed once via ensureRefreshTrigger_) that always runs
+ * as the script owner, and the result is cached (CacheService). Viewers only ever
+ * read that cache - they never call ClickUp themselves. This is deliberate: a web
+ * app deployed to "Execute as: User accessing the web app" requires every viewer's
+ * own Google account to individually authorize UrlFetchApp's external-request scope,
+ * and some partner companies' Workspace domains block that consent for unverified
+ * internal apps with no self-serve way around it. Caching removes the need for that
+ * scope entirely, so any signed-in Google user works immediately, no authorization
+ * step required.
  * The dashboard (stat cards, by-outlet, by-status, table) re-renders entirely
  * client-side when the outlet filter changes - no page reload.
  *
@@ -10,10 +19,13 @@
  *    CLICKUP_TOKEN = your ClickUp personal API token.
  *    (ADMINS, VIEWERS, PIC_MAPPINGS and OUTLET_CATEGORIES are all created/managed
  *    automatically by the in-portal "Manage Access" panel below - no manual setup.)
- * 2. Deploy > New deployment > Web app.
+ * 2. Run ensureRefreshTrigger_() once from this editor (as the owner) to start the
+ *    5-minute background refresh, then run refreshClickUpCache_() once immediately
+ *    after so the cache isn't empty before the first trigger fires.
+ * 3. Deploy > New deployment > Web app.
  *    - Execute as: User accessing the web app
  *    - Who has access: Anyone with a Google account
- * 3. Share the deployment URL. Add each PIC/Viewer/Admin via the in-portal "Manage Access"
+ * 4. Share the deployment URL. Add each PIC/Viewer/Admin via the in-portal "Manage Access"
  *    panel (Admins only). There is deliberately no Google Sheet involved anywhere in
  *    this project: who-has-access-to-what is sensitive (it shows every PIC's outlet
  *    assignment), and a Sheet is a Drive file - shareable, findable, exportable. It's
@@ -164,7 +176,11 @@ function ClickUpError_(message, detail) {
 }
 ClickUpError_.prototype = Object.create(Error.prototype);
 
-function getClickUpTasks_(country) {
+// Live ClickUp fetch - only ever called from refreshClickUpCache_ (the trigger), which
+// always runs as the script owner. Never call this from the doGet request path: that
+// path runs as whichever Google account is viewing the page, and would require every
+// such viewer to individually authorize UrlFetchApp - see the file header comment.
+function fetchClickUpTasksLive_(country) {
   var token = PropertiesService.getScriptProperties().getProperty('CLICKUP_TOKEN');
   var tasks = [];
   var page = 0;
@@ -185,16 +201,38 @@ function getClickUpTasks_(country) {
       name: getCustomFieldValue_(t, country.fullNameField) || t.name || '',
       position: getCustomFieldValue_(t, country.roleField),
       status: statusRaw.toUpperCase(),
-      dueDate: t.due_date ? new Date(Number(t.due_date)) : '',
-      lastUpdated: t.date_updated ? new Date(Number(t.date_updated)) : ''
+      dueDate: t.due_date ? new Date(Number(t.due_date)).toISOString() : null,
+      lastUpdated: t.date_updated ? new Date(Number(t.date_updated)).toISOString() : null
+    };
+  });
+}
+
+// Request-path read: the dashboard's onboarding rows, from the cache the trigger keeps
+// warm - never a live ClickUp call. See file header comment for why.
+function getClickUpTasks_(country) {
+  var raw = CacheService.getScriptCache().get('clickup_tasks_' + country.code);
+  if (!raw) {
+    throw new ClickUpError_('Onboarding data is still loading. Please try again in a few minutes.',
+      'Cache empty for ' + country.code + ' - the background refresh (refreshClickUpCache_) may not have run yet.');
+  }
+  return JSON.parse(raw).map(function (t) {
+    return {
+      outlet: t.outlet,
+      name: t.name,
+      position: t.position,
+      status: t.status,
+      dueDate: t.dueDate ? new Date(t.dueDate) : '',
+      lastUpdated: t.lastUpdated ? new Date(t.lastUpdated) : ''
     };
   });
 }
 
 // Each country's Outlet dropdown options come from its own ClickUp field definition
 // itself (auto-syncs as outlets are added/removed in ClickUp, no code change needed).
+// Request-path read: from cache, never a live ClickUp call - see file header comment.
 function getOutletOptionsForCountry_(country) {
-  return getOutletFieldOptions_(country.listId, country.outletField);
+  var raw = CacheService.getScriptCache().get('clickup_outlets_' + country.code);
+  return raw ? JSON.parse(raw) : [];
 }
 
 // The distinct outlets actually present in a set of rows, sorted. Used for a scoped
@@ -223,7 +261,9 @@ function getCustomFieldValue_(task, fieldName) {
   return String(field.value);
 }
 
-function getOutletFieldOptions_(listId, fieldName) {
+// Live ClickUp fetch - only ever called from refreshClickUpCache_. See fetchClickUpTasksLive_
+// above for why the request path must never call this directly.
+function fetchOutletFieldOptionsLive_(listId, fieldName) {
   var token = PropertiesService.getScriptProperties().getProperty('CLICKUP_TOKEN');
   var url = 'https://api.clickup.com/api/v2/list/' + listId + '/field';
   var data = fetchClickUp_(url, token);
@@ -234,6 +274,35 @@ function getOutletFieldOptions_(listId, fieldName) {
     .sort(function (a, b) { return a.orderindex - b.orderindex; })
     .map(function (o) { return o.name; })
     .filter(function (n) { return n; });
+}
+
+// Refreshes the ClickUp cache for both countries. Called only by the time-driven trigger
+// installed by ensureRefreshTrigger_, which always runs as the script owner - so this is
+// the one and only place UrlFetchApp is ever called under a real, already-authorized
+// identity. CacheService entries are set to the max 6h TTL; actual freshness is governed
+// by how often the trigger fires (every 5 minutes), not by this TTL.
+function refreshClickUpCache_() {
+  var cache = CacheService.getScriptCache();
+  COUNTRIES.forEach(function (c) {
+    var tasks = fetchClickUpTasksLive_(c);
+    var outlets = fetchOutletFieldOptionsLive_(c.listId, c.outletField);
+    cache.put('clickup_tasks_' + c.code, JSON.stringify(tasks), 21600);
+    cache.put('clickup_outlets_' + c.code, JSON.stringify(outlets), 21600);
+  });
+}
+
+// One-time setup: run this once from the editor (as the owner) to install the 5-minute
+// background refresh trigger. Idempotent - safe to run again without creating duplicates.
+function ensureRefreshTrigger_() {
+  var already = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'refreshClickUpCache_';
+  });
+  if (already) {
+    Logger.log('Trigger already exists - no action taken.');
+    return;
+  }
+  ScriptApp.newTrigger('refreshClickUpCache_').timeBased().everyMinutes(5).create();
+  Logger.log('Created refreshClickUpCache_ trigger, every 5 minutes.');
 }
 
 // ---- Access-control storage: Properties Service, deliberately not a Sheet ----
