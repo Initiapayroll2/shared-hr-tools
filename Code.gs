@@ -525,7 +525,7 @@ function addOutletCategory(countryCode, outlet, category) {
   });
   categories.push({ country: countryCode, outlet: outlet, category: category });
   saveOutletCategories_(categories);
-  return listAccess();
+  return listOutletCategories();
 }
 
 function removeOutletCategory(countryCode, outlet) {
@@ -535,7 +535,7 @@ function removeOutletCategory(countryCode, outlet) {
     return !(c.country === countryCode && String(c.outlet || '').trim().toLowerCase() === outletLower);
   });
   saveOutletCategories_(categories);
-  return listAccess();
+  return listOutletCategories();
 }
 
 // ---- Page shell: header + country toggle + filter select + empty client-rendered dashboard ----
