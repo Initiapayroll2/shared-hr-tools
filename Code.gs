@@ -78,11 +78,17 @@ var COUNTRIES = [
   }
 ];
 
-// Viewer scopes: a Viewer sees outlets tagged with their scope's category, read-only.
-// 'all' bypasses categorization entirely (same outlets as Admin). The rest depend on
-// OUTLET_CATEGORIES being set per outlet - see getOutletCategories_/saveOutletCategories_.
-var VALID_SCOPES = ['all', 'fnb', 'salon', 'others', 'group_management'];
+// Viewer scopes: 'all' ("Super Viewer") sees every outlet in both countries, unfiltered.
+// 'SG'/'MY' ("SG Viewer"/"MY Viewer") sees every outlet in just that one country,
+// unfiltered - a country-scoped Admin can grant only their own country's flavor of
+// this (see requireViewerScopePermission_ below). The rest ('fnb'/'salon'/'others'/
+// 'group_management') are category scopes that cut across both countries and depend
+// on OUTLET_CATEGORIES being set per outlet - see getOutletCategories_/
+// saveOutletCategories_ - and remain Super-Admin-only to grant, same as the
+// categories themselves.
+var VALID_SCOPES = ['all', 'SG', 'MY', 'fnb', 'salon', 'others', 'group_management'];
 var CATEGORY_LABELS = { all: 'All outlets', fnb: 'F&B', salon: 'Salon', others: 'Others', group_management: 'Group Management' };
+var VIEWER_COUNTRY_LABELS = { all: 'Super Viewer', SG: 'SG Viewer', MY: 'MY Viewer' };
 
 // Admin scopes: 'super' manages both countries plus Admins/Viewers/outlet categories;
 // 'SG'/'MY' is a country-scoped Admin, restricted to that country's own dashboard and
@@ -120,7 +126,7 @@ function doGetInner_(email) {
   var isAdmin = adminScope !== null;
   var viewerScope = isAdmin ? null : getViewerScope_(email);
   var roleLabel = adminScope ? ADMIN_ROLE_LABELS[adminScope]
-    : (viewerScope === 'all' ? 'Super Viewer'
+    : (VIEWER_COUNTRY_LABELS[viewerScope] ? VIEWER_COUNTRY_LABELS[viewerScope]
     : (viewerScope ? 'Viewer \u00B7 ' + (CATEGORY_LABELS[viewerScope] || viewerScope) : 'PIC'));
   var countries;
 
@@ -145,6 +151,17 @@ function doGetInner_(email) {
       outletsLabel: scopedCountry.label + ' (' + ADMIN_ROLE_LABELS[adminScope] + ' view)',
       rows: getClickUpTasks_(scopedCountry),
       outlets: getOutletOptionsForCountry_(scopedCountry)
+    }];
+  } else if (viewerScope === 'SG' || viewerScope === 'MY') {
+    // Country-scoped Viewer: full unfiltered read-only view of just this one country,
+    // same shape as the country-scoped Admin branch above minus the Manage Access button.
+    var viewerCountry = COUNTRIES.filter(function (c) { return c.code === viewerScope; })[0];
+    countries = [{
+      code: viewerCountry.code,
+      label: viewerCountry.label,
+      outletsLabel: viewerCountry.label + ' (all outlets)',
+      rows: getClickUpTasks_(viewerCountry),
+      outlets: getOutletOptionsForCountry_(viewerCountry)
     }];
   } else if (viewerScope) {
     // Scoped Viewer (F&B / Salon / Others / Group Management): filter every country's
@@ -396,21 +413,40 @@ function requireCountryAdmin_(countryCode) {
   return email;
 }
 
+// Gates granting/revoking a Viewer scope. A Super Admin can grant any scope. A
+// country-scoped Admin can only grant/revoke the "SG Viewer"/"MY Viewer" scope
+// matching their own country - never the cross-country 'all' or category scopes
+// (fnb/salon/others/group_management), which stay Super-Admin-only since they can
+// expose the other country's outlets.
+function requireViewerScopePermission_(scope) {
+  var email = Session.getActiveUser().getEmail();
+  var callerScope = email ? getAdminCountryScope_(email) : null;
+  if (!callerScope) throw new Error('Not authorized.');
+  if (callerScope === 'super') return email;
+  if (callerScope === scope) return email;
+  throw new Error('Not authorized.');
+}
+
 function isValidEmail_(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
 // A country-scoped Admin only ever gets their own country's slice back - they have no
-// business seeing the Admins/Viewers lists or the other country's PICs. A Super Admin
-// gets everything (Admins/Viewers/all PICs); outlet categories live on their own page
-// now (see listOutletCategories), not here.
+// business seeing the Admins list, the other country's PICs, or a Viewer scoped to
+// the other country / spanning both (only "their" SG-or-MY Viewer scope). A Super
+// Admin gets everything; outlet categories live on their own page now (see
+// listOutletCategories), not here.
 function listAccess() {
   var email = requireAdmin_();
   var scope = getAdminCountryScope_(email);
   if (scope === 'super') {
     return { scope: 'super', admins: getAdmins_(), viewers: getViewers_(), mappings: getMappings_() };
   }
-  return { scope: scope, mappings: getMappings_().filter(function (m) { return m.country === scope; }) };
+  return {
+    scope: scope,
+    viewers: getViewers_().filter(function (v) { return v.scope === scope; }),
+    mappings: getMappings_().filter(function (m) { return m.country === scope; })
+  };
 }
 
 function addAdmin(email, scope) {
@@ -442,13 +478,15 @@ function removeAdmin(email) {
 }
 
 function addViewer(email, scope) {
-  requireSuperAdmin_();
+  if (VALID_SCOPES.indexOf(scope) === -1) throw new Error('Unknown scope.');
+  requireViewerScopePermission_(scope);
   email = String(email || '').trim();
   if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
-  if (VALID_SCOPES.indexOf(scope) === -1) throw new Error('Unknown scope.');
   var emailLower = email.toLowerCase();
   // Upsert: re-adding an existing Viewer just changes their scope, rather than erroring -
-  // unlike Admins/PICs, "already exists" isn't a mistake worth blocking here.
+  // unlike Admins/PICs, "already exists" isn't a mistake worth blocking here. A country
+  // Admin re-tagging someone else's viewer entry into a scope outside their own country
+  // is still blocked above, before this ever runs.
   var viewers = getViewers_().filter(function (v) { return v.email.toLowerCase() !== emailLower; });
   viewers.push({ email: email, scope: scope });
   saveViewers_(viewers);
@@ -456,10 +494,15 @@ function addViewer(email, scope) {
 }
 
 function removeViewer(email) {
-  requireSuperAdmin_();
+  var caller = requireAdmin_();
+  var callerScope = getAdminCountryScope_(caller);
   var emailLower = String(email || '').trim().toLowerCase();
-  var viewers = getViewers_().filter(function (v) { return v.email.toLowerCase() !== emailLower; });
-  saveViewers_(viewers);
+  var viewers = getViewers_();
+  var target = viewers.filter(function (v) { return v.email.toLowerCase() === emailLower; })[0];
+  if (!target) return listAccess();
+  if (callerScope !== 'super' && target.scope !== callerScope) throw new Error('Not authorized.');
+  var remaining = viewers.filter(function (v) { return v.email.toLowerCase() !== emailLower; });
+  saveViewers_(remaining);
   return listAccess();
 }
 
@@ -494,9 +537,10 @@ function removePicMapping(countryCode, email, outlet) {
   return listAccess();
 }
 
-// Categories an outlet can be tagged with. Excludes 'all' - that's a valid Viewer
-// scope (see everything unfiltered) but not a category an outlet can be tagged with.
-var VALID_CATEGORIES = VALID_SCOPES.filter(function (s) { return s !== 'all'; });
+// Categories an outlet can be tagged with. Excludes 'all'/'SG'/'MY' - those are valid
+// Viewer scopes (see everything unfiltered, in one or both countries) but not
+// categories an outlet can be tagged with.
+var VALID_CATEGORIES = VALID_SCOPES.filter(function (s) { return s !== 'all' && s !== 'SG' && s !== 'MY'; });
 
 // Read by the separate Manage Outlet Categories panel - Super Admin only, unlike
 // listAccess which any Admin can call.
@@ -590,6 +634,7 @@ function clientEngine_() {
     'function esc(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}' +
     'function fmtDate(iso){if(!iso)return "";var d=new Date(iso);return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});}' +
     'function fmtTime(iso){if(!iso)return "";var d=new Date(iso);return d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});}' +
+    'function toTitleCase(v){return String(v==null?"":v).toLowerCase().replace(/(^|[\\s\\-\\(\\/])([a-z])/g,function(m,sep,ch){return sep+ch.toUpperCase();});}' +
     'function mondayOf(d){var date=new Date(d);var day=date.getDay();date.setDate(date.getDate()+(day===0?-6:1-day));date.setHours(0,0,0,0);return date;}' +
     'function statCard(value,label){return "<div class=\\"stat-card\\"><div class=\\"stat-value\\">"+value+"</div><div class=\\"stat-label\\">"+esc(label)+"</div></div>";}' +
     'function buildStatCards(rows){' +
@@ -626,7 +671,7 @@ function clientEngine_() {
         'var color=STATUS_COLORS[status]||DEFAULT_COLOR;' +
         'body+="<tr class=\\"group-header\\"><td colspan=\\"5\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
         'members.forEach(function(r){' +
-          'body+="<tr><td>"+esc(r.outlet)+"</td><td>"+esc(r.name)+"</td><td>"+esc(r.position)+"</td><td>"+esc(fmtDate(r.dueDate))+"</td><td class=\\"muted\\">"+esc(fmtDate(r.lastUpdated))+"</td></tr>";' +
+          'body+="<tr><td>"+esc(r.outlet)+"</td><td>"+esc(toTitleCase(r.name))+"</td><td>"+esc(r.position)+"</td><td>"+esc(fmtDate(r.dueDate))+"</td><td class=\\"muted\\">"+esc(fmtDate(r.lastUpdated))+"</td></tr>";' +
         '});' +
       '});' +
       'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Outlet</th><th>Employee</th><th>Position</th><th>Expected Join Date</th><th>Last Updated</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
@@ -664,8 +709,11 @@ function clientEngine_() {
       'el.innerHTML=buildStatCards(rows)+buildOutletBreakdown(rows,selected)+buildStatusBar(rows)+buildGroupedTable(rows);' +
     '}' +
     'var LAST_ACCESS_DATA=null;' +
-    'var SCOPE_LABELS={all:"Super Viewer",fnb:"F&B only",salon:"Salon only",others:"Others only",group_management:"Group Management only"};' +
-    'var SCOPE_OPTIONS=Object.keys(SCOPE_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(SCOPE_LABELS[k])+"</option>";}).join("");' +
+    'var SCOPE_LABELS={all:"Super Viewer",SG:"SG Viewer",MY:"MY Viewer",fnb:"F&B only",salon:"Salon only",others:"Others only",group_management:"Group Management only"};' +
+    'function viewerScopeOptionsFor(dataScope){' +
+      'var keys=dataScope==="super"?Object.keys(SCOPE_LABELS):[dataScope];' +
+      'return keys.map(function(k){return "<option value=\\""+k+"\\">"+esc(SCOPE_LABELS[k])+"</option>";}).join("");' +
+    '}' +
     'var ADMIN_ROLE_LABELS={super:"Super Admin",SG:"SG Admin",MY:"MY Admin"};' +
     'var ADMIN_SCOPE_OPTIONS=Object.keys(ADMIN_ROLE_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(ADMIN_ROLE_LABELS[k])+"</option>";}).join("");' +
     'function openAccessPanel(){' +
@@ -699,13 +747,15 @@ function clientEngine_() {
           '"<button class=\\"add-btn\\" onclick=\\"doAddAdmin()\\">Add admin</button></div>";' +
         'html+="<div class=\\"access-error\\" id=\\"adminError\\"></div>";' +
         'html+="</div>";' +
+      '}' +
+      'if(data.viewers){' +
         'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">Viewers (read-only)</div>";' +
         'data.viewers.forEach(function(v,i){' +
           'html+="<div class=\\"access-row\\"><span>"+esc(v.email)+"</span><span style=\\"display:flex;align-items:center;gap:8px;\\"><span class=\\"muted\\">"+esc(SCOPE_LABELS[v.scope]||v.scope)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveViewer("+i+")})\\">Remove</button></span></div>";' +
         '});' +
         'if(data.viewers.length===0)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No viewers yet.</div>";' +
         'html+="<div class=\\"add-form\\"><input type=\\"email\\" id=\\"newViewerEmail\\" placeholder=\\"name@company.com\\"/>"+' +
-          '"<select id=\\"newViewerScope\\">"+SCOPE_OPTIONS+"</select>"+' +
+          '"<select id=\\"newViewerScope\\">"+viewerScopeOptionsFor(data.scope)+"</select>"+' +
           '"<button class=\\"add-btn\\" onclick=\\"doAddViewer()\\">Add viewer</button></div>";' +
         'html+="<div class=\\"access-error\\" id=\\"viewerError\\"></div>";' +
         'html+="</div>";' +
