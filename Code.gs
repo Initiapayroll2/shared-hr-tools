@@ -48,13 +48,20 @@
  *    sharing setting. No PIC needs, or gets, any Drive/Sheet permission at any point.
  *
  * ROLES:
- *    Admin  - sees every outlet in every country, manages Admins/Viewers/PICs.
- *    Viewer - read-only, no Manage Access button. Scope 'all' sees everything Admin
- *             sees; 'fnb'/'salon'/'others'/'group_management' sees only outlets tagged
- *             with that category in OUTLET_CATEGORIES. A country with none of its
- *             outlets tagged for that scope simply doesn't show up for that Viewer,
- *             rather than showing it unfiltered.
- *    PIC    - sees only their explicitly assigned outlet(s), as before.
+ *    Super Admin - sees every outlet in every country. Only role that can manage
+ *                  Admins/Viewers, and the only one that can reach the separate
+ *                  "Manage Outlet Categories" page (?page=outlets).
+ *    SG/MY Admin - a country-scoped Admin: sees and manages PICs for their own
+ *                  country only. Cannot see the other country, Admins, Viewers, or
+ *                  outlet categories - "Manage Access" for them shows just their
+ *                  own country's PIC section.
+ *    Viewer      - read-only, no Manage Access button. Scope 'all' ("Super Viewer")
+ *                  sees everything a Super Admin sees; 'fnb'/'salon'/'others'/
+ *                  'group_management' sees only outlets tagged with that category in
+ *                  OUTLET_CATEGORIES. A country with none of its outlets tagged for
+ *                  that scope simply doesn't show up for that Viewer, rather than
+ *                  showing it unfiltered.
+ *    PIC         - sees only their explicitly assigned outlet(s), as before.
  */
 
 // Each country's Outlet/Position/Full Name come from its own ClickUp custom fields -
@@ -77,6 +84,12 @@ var COUNTRIES = [
 var VALID_SCOPES = ['all', 'fnb', 'salon', 'others', 'group_management'];
 var CATEGORY_LABELS = { all: 'All outlets', fnb: 'F&B', salon: 'Salon', others: 'Others', group_management: 'Group Management' };
 
+// Admin scopes: 'super' manages both countries plus Admins/Viewers/outlet categories;
+// 'SG'/'MY' is a country-scoped Admin, restricted to that country's own dashboard and
+// PIC management only. See ADMINS storage note below for the on-disk shape.
+var ADMIN_SCOPES = ['super', 'SG', 'MY'];
+var ADMIN_ROLE_LABELS = { super: 'Super Admin', SG: 'SG Admin', MY: 'MY Admin' };
+
 // Each country has its own outlet namespace - an outlet named e.g. "Modu K" in
 // Singapore is a completely different outlet from one with the same name in
 // Malaysia. So a PIC's access is always resolved within a single country's own
@@ -89,6 +102,9 @@ function doGet(e) {
   }
 
   try {
+    if (e && e.parameter && e.parameter.page === 'outlets') {
+      return doGetOutletsPage_(email);
+    }
     return doGetInner_(email);
   } catch (err) {
     if (err && err.isClickUpError) {
@@ -103,22 +119,36 @@ function doGet(e) {
 }
 
 function doGetInner_(email) {
-  var isAdmin = isAdmin_(email);
+  var adminScope = getAdminCountryScope_(email); // 'super' | 'SG' | 'MY' | null
+  var isAdmin = adminScope !== null;
   var viewerScope = isAdmin ? null : getViewerScope_(email);
-  var roleLabel = isAdmin ? 'Admin' : (viewerScope ? 'Viewer · ' + (CATEGORY_LABELS[viewerScope] || viewerScope) : 'PIC');
+  var roleLabel = adminScope ? ADMIN_ROLE_LABELS[adminScope]
+    : (viewerScope === 'all' ? 'Super Viewer'
+    : (viewerScope ? 'Viewer · ' + (CATEGORY_LABELS[viewerScope] || viewerScope) : 'PIC'));
   var countries;
 
-  if (isAdmin || viewerScope === 'all') {
+  if (adminScope === 'super' || viewerScope === 'all') {
     countries = COUNTRIES.map(function (c) {
       var rows = getClickUpTasks_(c);
       return {
         code: c.code,
         label: c.label,
-        outletsLabel: c.label + (isAdmin ? ' (admin view)' : ' (all outlets)'),
+        outletsLabel: c.label + (adminScope === 'super' ? ' (admin view)' : ' (all outlets)'),
         rows: rows,
         outlets: getOutletOptionsForCountry_(c)
       };
     });
+  } else if (adminScope === 'SG' || adminScope === 'MY') {
+    // Country-scoped Admin: full unfiltered view of their own country only, same
+    // shape as the Super Admin branch above but a single country.
+    var scopedCountry = COUNTRIES.filter(function (c) { return c.code === adminScope; })[0];
+    countries = [{
+      code: scopedCountry.code,
+      label: scopedCountry.label,
+      outletsLabel: scopedCountry.label + ' (' + ADMIN_ROLE_LABELS[adminScope] + ' view)',
+      rows: getClickUpTasks_(scopedCountry),
+      outlets: getOutletOptionsForCountry_(scopedCountry)
+    }];
   } else if (viewerScope) {
     // Scoped Viewer (F&B / Salon / Others / Group Management): filter every country's
     // rows to outlets tagged with this scope's category. A country with no categorized
@@ -262,9 +292,16 @@ function uniqueOutlets_(rows) {
 // no "share" concept, and is read the same way regardless of who is viewing the web app, so
 // none of this can ever be found in anyone's Drive no matter what.
 
+// ADMINS entries are {email, scope} objects, scope one of ADMIN_SCOPES. Older data
+// (from before the Super/Country Admin split) stored plain email strings - those are
+// normalized to {email, scope:'super'} on every read so existing admins keep full
+// access with no manual migration step; the next save persists the new shape.
 function getAdmins_() {
   var raw = PropertiesService.getScriptProperties().getProperty('ADMINS');
-  return raw ? JSON.parse(raw) : [];
+  var list = raw ? JSON.parse(raw) : [];
+  return list.map(function (a) {
+    return typeof a === 'string' ? { email: a, scope: 'super' } : a;
+  });
 }
 
 function saveAdmins_(admins) {
@@ -309,8 +346,18 @@ function getOutletCategoryFor_(categories, countryCode, outlet) {
 }
 
 function isAdmin_(email) {
+  return getAdminCountryScope_(email) !== null;
+}
+
+function isSuperAdmin_(email) {
+  return getAdminCountryScope_(email) === 'super';
+}
+
+// Returns 'super' | 'SG' | 'MY' | null - null meaning this email isn't an Admin at all.
+function getAdminCountryScope_(email) {
   var target = String(email || '').trim().toLowerCase();
-  return getAdmins_().some(function (a) { return String(a || '').trim().toLowerCase() === target; });
+  var match = getAdmins_().filter(function (a) { return String(a.email || '').trim().toLowerCase() === target; })[0];
+  return match ? match.scope : null;
 }
 
 function getViewerScope_(email) {
@@ -338,42 +385,67 @@ function requireAdmin_() {
   return email;
 }
 
+function requireSuperAdmin_() {
+  var email = Session.getActiveUser().getEmail();
+  if (!email || !isSuperAdmin_(email)) throw new Error('Not authorized.');
+  return email;
+}
+
+// A Super Admin can act for any country; a country-scoped Admin only for their own.
+function requireCountryAdmin_(countryCode) {
+  var email = Session.getActiveUser().getEmail();
+  var scope = email ? getAdminCountryScope_(email) : null;
+  if (!scope || (scope !== 'super' && scope !== countryCode)) throw new Error('Not authorized.');
+  return email;
+}
+
 function isValidEmail_(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
+// A country-scoped Admin only ever gets their own country's slice back - they have no
+// business seeing the Admins/Viewers lists or the other country's PICs. A Super Admin
+// gets everything (Admins/Viewers/all PICs); outlet categories live on their own page
+// now (see listOutletCategories), not here.
 function listAccess() {
-  requireAdmin_();
-  return { admins: getAdmins_(), viewers: getViewers_(), mappings: getMappings_(), categories: getOutletCategories_() };
+  var email = requireAdmin_();
+  var scope = getAdminCountryScope_(email);
+  if (scope === 'super') {
+    return { scope: 'super', admins: getAdmins_(), viewers: getViewers_(), mappings: getMappings_() };
+  }
+  return { scope: scope, mappings: getMappings_().filter(function (m) { return m.country === scope; }) };
 }
 
-function addAdmin(email) {
-  requireAdmin_();
+function addAdmin(email, scope) {
+  requireSuperAdmin_();
   email = String(email || '').trim();
   if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
+  if (ADMIN_SCOPES.indexOf(scope) === -1) throw new Error('Unknown admin scope.');
   var admins = getAdmins_();
   var target = email.toLowerCase();
-  if (admins.some(function (a) { return a.toLowerCase() === target; })) {
+  if (admins.some(function (a) { return a.email.toLowerCase() === target; })) {
     throw new Error(email + ' is already an admin.');
   }
-  admins.push(email);
+  admins.push({ email: email, scope: scope });
   saveAdmins_(admins);
   return listAccess();
 }
 
 function removeAdmin(email) {
-  requireAdmin_();
+  requireSuperAdmin_();
   var target = String(email || '').trim().toLowerCase();
   var admins = getAdmins_();
-  var remaining = admins.filter(function (a) { return a.toLowerCase() !== target; });
+  var remaining = admins.filter(function (a) { return a.email.toLowerCase() !== target; });
   if (remaining.length === admins.length) return listAccess();
-  if (remaining.length === 0) throw new Error('Cannot remove the last admin.');
+  if (!remaining.some(function (a) { return a.scope === 'super'; })) {
+    throw new Error('Cannot remove the last Super Admin.');
+  }
   saveAdmins_(remaining);
   return listAccess();
 }
 
 function addViewer(email, scope) {
-  requireAdmin_();
+  requireSuperAdmin_();
   email = String(email || '').trim();
   if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
   if (VALID_SCOPES.indexOf(scope) === -1) throw new Error('Unknown scope.');
@@ -387,7 +459,7 @@ function addViewer(email, scope) {
 }
 
 function removeViewer(email) {
-  requireAdmin_();
+  requireSuperAdmin_();
   var emailLower = String(email || '').trim().toLowerCase();
   var viewers = getViewers_().filter(function (v) { return v.email.toLowerCase() !== emailLower; });
   saveViewers_(viewers);
@@ -395,7 +467,7 @@ function removeViewer(email) {
 }
 
 function addPicMapping(countryCode, email, outlet) {
-  requireAdmin_();
+  requireCountryAdmin_(countryCode);
   var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
   if (!country) throw new Error('Unknown country.');
   email = String(email || '').trim();
@@ -415,7 +487,7 @@ function addPicMapping(countryCode, email, outlet) {
 }
 
 function removePicMapping(countryCode, email, outlet) {
-  requireAdmin_();
+  requireCountryAdmin_(countryCode);
   var emailLower = String(email || '').trim().toLowerCase();
   var outletLower = String(outlet || '').trim().toLowerCase();
   var mappings = getMappings_().filter(function (m) {
@@ -429,8 +501,20 @@ function removePicMapping(countryCode, email, outlet) {
 // scope (see everything unfiltered) but not a category an outlet can be tagged with.
 var VALID_CATEGORIES = VALID_SCOPES.filter(function (s) { return s !== 'all'; });
 
+// Read by the separate Manage Outlet Categories page (?page=outlets) - Super Admin
+// only, unlike listAccess which any Admin can call.
+function listOutletCategories() {
+  requireSuperAdmin_();
+  return {
+    categories: getOutletCategories_(),
+    countries: COUNTRIES.map(function (c) {
+      return { code: c.code, label: c.label, outlets: getOutletOptionsForCountry_(c) };
+    })
+  };
+}
+
 function addOutletCategory(countryCode, outlet, category) {
-  requireAdmin_();
+  requireSuperAdmin_();
   var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
   if (!country) throw new Error('Unknown country.');
   outlet = String(outlet || '').trim();
@@ -448,13 +532,80 @@ function addOutletCategory(countryCode, outlet, category) {
 }
 
 function removeOutletCategory(countryCode, outlet) {
-  requireAdmin_();
+  requireSuperAdmin_();
   var outletLower = String(outlet || '').trim().toLowerCase();
   var categories = getOutletCategories_().filter(function (c) {
     return !(c.country === countryCode && String(c.outlet || '').trim().toLowerCase() === outletLower);
   });
   saveOutletCategories_(categories);
   return listAccess();
+}
+
+// ---- Manage Outlet Categories: separate, Super-Admin-only page (?page=outlets) ----
+// Split out from the main dashboard's "Manage Access" panel because tagging an
+// outlet's category is a slow-changing taxonomy decision, not day-to-day PIC access -
+// SG/MY Admins have no reason to see or touch it, so it lives at its own URL instead
+// of inside the modal every Admin type could otherwise open.
+
+function doGetOutletsPage_(email) {
+  if (!isSuperAdmin_(email)) {
+    return HtmlOutput_('Not authorized', '<p>Only a Super Admin can manage outlet categories.</p><p><a href="?">Back to dashboard</a></p>');
+  }
+  return HtmlOutput_('Manage Outlet Categories', renderOutletsPageShell_());
+}
+
+function renderOutletsPageShell_() {
+  return '' +
+    '<div class="header"><div><h1>Manage Outlet Categories</h1>' +
+    '<div class="muted">Super Admin only &middot; <a href="?">Back to dashboard</a></div></div></div>' +
+    '<div id="categoriesBody"><p class="muted">Loading&hellip;</p></div>' +
+    '<script>' + outletsPageClientEngine_() + '\nloadCategories();\n<\/script>';
+}
+
+function outletsPageClientEngine_() {
+  return '' +
+    'function esc(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}' +
+    'var CATEGORY_LABELS={fnb:"F&B",salon:"Salon",others:"Others",group_management:"Group Management"};' +
+    'var CATEGORY_OPTIONS=Object.keys(CATEGORY_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(CATEGORY_LABELS[k])+"</option>";}).join("");' +
+    'var LAST_DATA=null;' +
+    'function armConfirm(btn,onConfirm){btn.textContent="Click again to confirm";btn.className="remove-btn confirming";btn.onclick=onConfirm;}' +
+    'function loadCategories(){google.script.run.withSuccessHandler(render).withFailureHandler(fail).listOutletCategories();}' +
+    'function fail(err){document.getElementById("categoriesBody").innerHTML="<div class=\\"access-error\\">"+esc(err&&err.message?err.message:String(err))+"</div>";}' +
+    'function render(data){' +
+      'LAST_DATA=data;' +
+      'var html="";' +
+      'data.countries.forEach(function(c){' +
+        'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">"+esc(c.label)+" outlet categories</div>";' +
+        'var any=false;' +
+        'data.categories.forEach(function(cat,idx){' +
+          'if(cat.country!==c.code)return;' +
+          'any=true;' +
+          'html+="<div class=\\"access-row\\"><span>"+esc(cat.outlet)+" \\u2192 "+esc(CATEGORY_LABELS[cat.category]||cat.category)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemove("+idx+")})\\">Remove</button></div>";' +
+        '});' +
+        'if(!any)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No outlets tagged yet.</div>";' +
+        'var opts=(c.outlets||[]).map(function(o){return "<option value=\\""+esc(o)+"\\">"+esc(o)+"</option>";}).join("");' +
+        'html+="<div class=\\"add-form\\">"+' +
+          '"<select id=\\"catOutlet_"+c.code+"\\"><option value=\\"\\">Select outlet</option>"+opts+"</select>"+' +
+          '"<select id=\\"catCategory_"+c.code+"\\">"+CATEGORY_OPTIONS+"</select>"+' +
+          '"<button class=\\"add-btn\\" onclick=\\"doAdd(\'"+c.code+"\')\\">Tag outlet</button></div>";' +
+        'html+="<div class=\\"access-error\\" id=\\"catError_"+c.code+"\\"></div>";' +
+        'html+="</div>";' +
+      '});' +
+      'document.getElementById("categoriesBody").innerHTML=html;' +
+    '}' +
+    'function doAdd(countryCode){' +
+      'var outletEl=document.getElementById("catOutlet_"+countryCode);' +
+      'var categoryEl=document.getElementById("catCategory_"+countryCode);' +
+      'var outlet=outletEl.value;var category=categoryEl.value;' +
+      'var errBox=document.getElementById("catError_"+countryCode);if(errBox)errBox.textContent="";' +
+      'if(!outlet){if(errBox)errBox.textContent="Choose an outlet.";return;}' +
+      'google.script.run.withSuccessHandler(function(){loadCategories();}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addOutletCategory(countryCode,outlet,category);' +
+    '}' +
+    'function doRemove(idx){' +
+      'if(!LAST_DATA||!LAST_DATA.categories[idx])return;' +
+      'var cat=LAST_DATA.categories[idx];' +
+      'google.script.run.withSuccessHandler(function(){loadCategories();}).withFailureHandler(function(err){alert(err&&err.message?err.message:String(err));}).removeOutletCategory(cat.country,cat.outlet);' +
+    '}';
 }
 
 // ---- Page shell: header + country toggle + filter select + empty client-rendered dashboard ----
@@ -582,10 +733,10 @@ function clientEngine_() {
       'el.innerHTML=buildStatCards(rows)+buildOutletBreakdown(rows,selected)+buildStatusBar(rows)+buildGroupedTable(rows);' +
     '}' +
     'var LAST_ACCESS_DATA=null;' +
-    'var SCOPE_LABELS={all:"All outlets",fnb:"F&B only",salon:"Salon only",others:"Others only",group_management:"Group Management only"};' +
+    'var SCOPE_LABELS={all:"Super Viewer",fnb:"F&B only",salon:"Salon only",others:"Others only",group_management:"Group Management only"};' +
     'var SCOPE_OPTIONS=Object.keys(SCOPE_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(SCOPE_LABELS[k])+"</option>";}).join("");' +
-    'var CATEGORY_LABELS={fnb:"F&B",salon:"Salon",others:"Others",group_management:"Group Management"};' +
-    'var CATEGORY_OPTIONS=Object.keys(CATEGORY_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(CATEGORY_LABELS[k])+"</option>";}).join("");' +
+    'var ADMIN_ROLE_LABELS={super:"Super Admin",SG:"SG Admin",MY:"MY Admin"};' +
+    'var ADMIN_SCOPE_OPTIONS=Object.keys(ADMIN_ROLE_LABELS).map(function(k){return "<option value=\\""+k+"\\">"+esc(ADMIN_ROLE_LABELS[k])+"</option>";}).join("");' +
     'function openAccessPanel(){' +
       'document.getElementById("accessModal").style.display="flex";' +
       'document.getElementById("accessModalContent").innerHTML="<p class=\\"muted\\">Loading\\u2026</p>";' +
@@ -607,23 +758,27 @@ function clientEngine_() {
       'var html="<button class=\\"modal-close\\" onclick=\\"closeAccessPanel()\\">&times;</button>";' +
       'html+="<h2>Manage Access</h2><div class=\\"muted\\" style=\\"margin-bottom:8px;\\">Changes apply immediately.</div>";' +
       'html+="<div class=\\"access-error\\" id=\\"topAccessError\\"></div>";' +
-      'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">Admins (see every outlet)</div>";' +
-      'data.admins.forEach(function(a,i){' +
-        'html+="<div class=\\"access-row\\"><span>"+esc(a)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveAdmin("+i+")})\\">Remove</button></div>";' +
-      '});' +
-      'html+="<div class=\\"add-form\\"><input type=\\"email\\" id=\\"newAdminEmail\\" placeholder=\\"name@company.com\\"/><button class=\\"add-btn\\" onclick=\\"doAddAdmin()\\">Add admin</button></div>";' +
-      'html+="<div class=\\"access-error\\" id=\\"adminError\\"></div>";' +
-      'html+="</div>";' +
-      'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">Viewers (read-only)</div>";' +
-      'data.viewers.forEach(function(v,i){' +
-        'html+="<div class=\\"access-row\\"><span>"+esc(v.email)+"</span><span style=\\"display:flex;align-items:center;gap:8px;\\"><span class=\\"muted\\">"+esc(SCOPE_LABELS[v.scope]||v.scope)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveViewer("+i+")})\\">Remove</button></span></div>";' +
-      '});' +
-      'if(data.viewers.length===0)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No viewers yet.</div>";' +
-      'html+="<div class=\\"add-form\\"><input type=\\"email\\" id=\\"newViewerEmail\\" placeholder=\\"name@company.com\\"/>"+' +
-        '"<select id=\\"newViewerScope\\">"+SCOPE_OPTIONS+"</select>"+' +
-        '"<button class=\\"add-btn\\" onclick=\\"doAddViewer()\\">Add viewer</button></div>";' +
-      'html+="<div class=\\"access-error\\" id=\\"viewerError\\"></div>";' +
-      'html+="</div>";' +
+      'if(data.scope==="super"){' +
+        'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">Admins</div>";' +
+        'data.admins.forEach(function(a,i){' +
+          'html+="<div class=\\"access-row\\"><span>"+esc(a.email)+"</span><span style=\\"display:flex;align-items:center;gap:8px;\\"><span class=\\"muted\\">"+esc(ADMIN_ROLE_LABELS[a.scope]||a.scope)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveAdmin("+i+")})\\">Remove</button></span></div>";' +
+        '});' +
+        'html+="<div class=\\"add-form\\"><input type=\\"email\\" id=\\"newAdminEmail\\" placeholder=\\"name@company.com\\"/>"+' +
+          '"<select id=\\"newAdminScope\\">"+ADMIN_SCOPE_OPTIONS+"</select>"+' +
+          '"<button class=\\"add-btn\\" onclick=\\"doAddAdmin()\\">Add admin</button></div>";' +
+        'html+="<div class=\\"access-error\\" id=\\"adminError\\"></div>";' +
+        'html+="</div>";' +
+        'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">Viewers (read-only)</div>";' +
+        'data.viewers.forEach(function(v,i){' +
+          'html+="<div class=\\"access-row\\"><span>"+esc(v.email)+"</span><span style=\\"display:flex;align-items:center;gap:8px;\\"><span class=\\"muted\\">"+esc(SCOPE_LABELS[v.scope]||v.scope)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveViewer("+i+")})\\">Remove</button></span></div>";' +
+        '});' +
+        'if(data.viewers.length===0)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No viewers yet.</div>";' +
+        'html+="<div class=\\"add-form\\"><input type=\\"email\\" id=\\"newViewerEmail\\" placeholder=\\"name@company.com\\"/>"+' +
+          '"<select id=\\"newViewerScope\\">"+SCOPE_OPTIONS+"</select>"+' +
+          '"<button class=\\"add-btn\\" onclick=\\"doAddViewer()\\">Add viewer</button></div>";' +
+        'html+="<div class=\\"access-error\\" id=\\"viewerError\\"></div>";' +
+        'html+="</div>";' +
+      '}' +
       'COUNTRIES.forEach(function(c){' +
         'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">"+esc(c.label)+" PICs</div>";' +
         'var any=false;' +
@@ -641,35 +796,23 @@ function clientEngine_() {
         'html+="<div class=\\"access-error\\" id=\\"mappingError_"+c.code+"\\"></div>";' +
         'html+="</div>";' +
       '});' +
-      'COUNTRIES.forEach(function(c){' +
-        'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">"+esc(c.label)+" outlet categories (for scoped Viewers)</div>";' +
-        'var any=false;' +
-        'data.categories.forEach(function(cat,idx){' +
-          'if(cat.country!==c.code)return;' +
-          'any=true;' +
-          'html+="<div class=\\"access-row\\"><span>"+esc(cat.outlet)+" \\u2192 "+esc(CATEGORY_LABELS[cat.category]||cat.category)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveCategory("+idx+")})\\">Remove</button></div>";' +
-        '});' +
-        'if(!any)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No outlets tagged yet.</div>";' +
-        'var catOutletOpts=(c.outlets||[]).map(function(o){return "<option value=\\""+esc(o)+"\\">"+esc(o)+"</option>";}).join("");' +
-        'html+="<div class=\\"add-form\\">"+' +
-          '"<select id=\\"newCatOutlet_"+c.code+"\\"><option value=\\"\\">Select outlet</option>"+catOutletOpts+"</select>"+' +
-          '"<select id=\\"newCatCategory_"+c.code+"\\">"+CATEGORY_OPTIONS+"</select>"+' +
-          '"<button class=\\"add-btn\\" onclick=\\"doAddCategory(\'"+c.code+"\')\\">Tag outlet</button></div>";' +
-        'html+="<div class=\\"access-error\\" id=\\"categoryError_"+c.code+"\\"></div>";' +
-        'html+="</div>";' +
-      '});' +
+      'if(data.scope==="super"){' +
+        'html+="<div class=\\"access-section\\"><a href=\\"?page=outlets\\" target=\\"_blank\\">Manage Outlet Categories \\u2192</a></div>";' +
+      '}' +
       'document.getElementById("accessModalContent").innerHTML=html;' +
     '}' +
     'function doAddAdmin(){' +
       'var el=document.getElementById("newAdminEmail");' +
+      'var scopeEl=document.getElementById("newAdminScope");' +
       'var email=el.value.trim();' +
+      'var scope=scopeEl.value;' +
       'var errBox=document.getElementById("adminError");' +
       'if(errBox)errBox.textContent="";' +
-      'google.script.run.withSuccessHandler(function(data){el.value="";renderAccessPanel(data);}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addAdmin(email);' +
+      'google.script.run.withSuccessHandler(function(data){el.value="";renderAccessPanel(data);}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addAdmin(email,scope);' +
     '}' +
     'function doRemoveAdmin(i){' +
       'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.admins[i])return;' +
-      'var email=LAST_ACCESS_DATA.admins[i];' +
+      'var email=LAST_ACCESS_DATA.admins[i].email;' +
       'var errBox=document.getElementById("topAccessError");' +
       'if(errBox)errBox.textContent="";' +
       'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removeAdmin(email);' +
@@ -706,23 +849,6 @@ function clientEngine_() {
       'var errBox=document.getElementById("topAccessError");' +
       'if(errBox)errBox.textContent="";' +
       'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removePicMapping(m.country,m.email,m.outlet);' +
-    '}' +
-    'function doAddCategory(countryCode){' +
-      'var outletEl=document.getElementById("newCatOutlet_"+countryCode);' +
-      'var categoryEl=document.getElementById("newCatCategory_"+countryCode);' +
-      'var outlet=outletEl.value;' +
-      'var category=categoryEl.value;' +
-      'var errBox=document.getElementById("categoryError_"+countryCode);' +
-      'if(errBox)errBox.textContent="";' +
-      'if(!outlet){if(errBox)errBox.textContent="Choose an outlet.";return;}' +
-      'google.script.run.withSuccessHandler(function(data){outletEl.value="";renderAccessPanel(data);}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addOutletCategory(countryCode,outlet,category);' +
-    '}' +
-    'function doRemoveCategory(idx){' +
-      'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.categories[idx])return;' +
-      'var cat=LAST_ACCESS_DATA.categories[idx];' +
-      'var errBox=document.getElementById("topAccessError");' +
-      'if(errBox)errBox.textContent="";' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removeOutletCategory(cat.country,cat.outlet);' +
     '}';
 }
 
