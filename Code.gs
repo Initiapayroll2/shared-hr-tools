@@ -732,6 +732,9 @@ function clientEngine_() {
       '}' +
       'document.getElementById("accessModalContent").innerHTML=html;' +
     '}' +
+    'function withAccessField(prevData,field,value){' +
+      'return {scope:prevData.scope,admins:field==="admins"?value:prevData.admins,viewers:field==="viewers"?value:prevData.viewers,mappings:field==="mappings"?value:prevData.mappings};' +
+    '}' +
     'function doAddAdmin(){' +
       'var el=document.getElementById("newAdminEmail");' +
       'var scopeEl=document.getElementById("newAdminScope");' +
@@ -739,14 +742,22 @@ function clientEngine_() {
       'var scope=scopeEl.value;' +
       'var errBox=document.getElementById("adminError");' +
       'if(errBox)errBox.textContent="";' +
-      'google.script.run.withSuccessHandler(function(data){el.value="";renderAccessPanel(data);}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addAdmin(email,scope);' +
+      'if(!email){if(errBox)errBox.textContent="Enter an email address.";return;}' +
+      'var prevData=LAST_ACCESS_DATA;' +
+      'var optimistic=prevData.admins.concat([{email:email,scope:scope}]);' +
+      'renderAccessPanel(withAccessField(prevData,"admins",optimistic));' +
+      'el.value="";' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("adminError");if(e)e.textContent=err&&err.message?err.message:String(err);}).addAdmin(email,scope);' +
     '}' +
     'function doRemoveAdmin(i){' +
       'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.admins[i])return;' +
       'var email=LAST_ACCESS_DATA.admins[i].email;' +
       'var errBox=document.getElementById("topAccessError");' +
       'if(errBox)errBox.textContent="";' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removeAdmin(email);' +
+      'var prevData=LAST_ACCESS_DATA;' +
+      'var optimistic=prevData.admins.filter(function(a,idx){return idx!==i;});' +
+      'renderAccessPanel(withAccessField(prevData,"admins",optimistic));' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("topAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeAdmin(email);' +
     '}' +
     'function doAddViewer(){' +
       'var emailEl=document.getElementById("newViewerEmail");' +
@@ -755,14 +766,23 @@ function clientEngine_() {
       'var scope=scopeEl.value;' +
       'var errBox=document.getElementById("viewerError");' +
       'if(errBox)errBox.textContent="";' +
-      'google.script.run.withSuccessHandler(function(data){emailEl.value="";renderAccessPanel(data);}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addViewer(email,scope);' +
+      'if(!email){if(errBox)errBox.textContent="Enter an email address.";return;}' +
+      'var prevData=LAST_ACCESS_DATA;' +
+      'var emailLower=email.toLowerCase();' +
+      'var optimistic=prevData.viewers.filter(function(v){return v.email.toLowerCase()!==emailLower;}).concat([{email:email,scope:scope}]);' +
+      'renderAccessPanel(withAccessField(prevData,"viewers",optimistic));' +
+      'emailEl.value="";' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("viewerError");if(e)e.textContent=err&&err.message?err.message:String(err);}).addViewer(email,scope);' +
     '}' +
     'function doRemoveViewer(i){' +
       'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.viewers[i])return;' +
       'var email=LAST_ACCESS_DATA.viewers[i].email;' +
       'var errBox=document.getElementById("topAccessError");' +
       'if(errBox)errBox.textContent="";' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removeViewer(email);' +
+      'var prevData=LAST_ACCESS_DATA;' +
+      'var optimistic=prevData.viewers.filter(function(v,idx){return idx!==i;});' +
+      'renderAccessPanel(withAccessField(prevData,"viewers",optimistic));' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("topAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeViewer(email);' +
     '}' +
     'function doAddMapping(countryCode){' +
       'var emailEl=document.getElementById("newPicEmail_"+countryCode);' +
@@ -772,14 +792,22 @@ function clientEngine_() {
       'var errBox=document.getElementById("mappingError_"+countryCode);' +
       'if(errBox)errBox.textContent="";' +
       'if(!outlet){if(errBox)errBox.textContent="Choose an outlet.";return;}' +
-      'google.script.run.withSuccessHandler(function(data){emailEl.value="";outletEl.value="";renderAccessPanel(data);}).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).addPicMapping(countryCode,email,outlet);' +
+      'if(!email){if(errBox)errBox.textContent="Enter an email address.";return;}' +
+      'var prevData=LAST_ACCESS_DATA;' +
+      'var optimistic=prevData.mappings.concat([{country:countryCode,email:email,outlet:outlet}]);' +
+      'renderAccessPanel(withAccessField(prevData,"mappings",optimistic));' +
+      'emailEl.value="";outletEl.value="";' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("mappingError_"+countryCode);if(e)e.textContent=err&&err.message?err.message:String(err);}).addPicMapping(countryCode,email,outlet);' +
     '}' +
     'function doRemoveMapping(idx){' +
       'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.mappings[idx])return;' +
       'var m=LAST_ACCESS_DATA.mappings[idx];' +
       'var errBox=document.getElementById("topAccessError");' +
       'if(errBox)errBox.textContent="";' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){if(errBox)errBox.textContent=err&&err.message?err.message:String(err);}).removePicMapping(m.country,m.email,m.outlet);' +
+      'var prevData=LAST_ACCESS_DATA;' +
+      'var optimistic=prevData.mappings.filter(function(x,i){return i!==idx;});' +
+      'renderAccessPanel(withAccessField(prevData,"mappings",optimistic));' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("topAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removePicMapping(m.country,m.email,m.outlet);' +
     '}' +
     'var LAST_CATEGORY_DATA=null;' +
     'var OUTLET_CATEGORY_LABELS={fnb:"F&B",salon:"Salon",others:"Others",group_management:"Group Management"};' +
