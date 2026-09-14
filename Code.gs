@@ -5,7 +5,7 @@
  * This project deliberately contains NO ClickUp/UrlFetchApp code and NO trigger
  * setup (ScriptApp). That's a second, separate Apps Script project - the
  * "ClickUp Fetcher" - which nobody but the owner ever opens: it polls ClickUp
- * every 5 minutes and POSTs the result here (see doPost below), authenticated
+ * every minute and pushes the result here (see pushData below), authenticated
  * by a shared secret. Why split it this way: Apps Script decides what
  * permissions a deployed web app needs by scanning the WHOLE project's code,
  * not just the code path a given request actually takes - so merely not
@@ -14,22 +14,31 @@
  * "Google hasn't verified this app" warning to grant it. With that code moved
  * out entirely, this project's only required permission is basic sign-in, so
  * visitors never see that warning at all.
+ * The push itself goes through Apps Script's Library mechanism (Fetcher adds this
+ * project as a library and calls pushData(...) directly), not an HTTP webhook -
+ * this Workspace domain's web app deployments reject every server-to-server call
+ * regardless of access level ("Anyone with a Google account" and "Only myself"
+ * were both tried) or Authorization token, so a doPost-based push cannot work
+ * here at all. A library call is a plain in-process function call, so there's no
+ * sign-in gate to fail.
  * The dashboard (stat cards, by-outlet, by-status, table) re-renders entirely
  * client-side when the outlet filter changes - no page reload.
  *
  * SETUP:
  * 1. Script Properties (Project Settings > Script Properties):
  *    PUSH_SECRET = a long random string, must match the Fetcher project's own
- *    PUSH_SECRET exactly - it's how doPost knows a push actually came from it.
+ *    PUSH_SECRET exactly - it's how pushData knows a call actually came from it.
  *    (ADMINS, VIEWERS, PIC_MAPPINGS and OUTLET_CATEGORIES are all created/managed
  *    automatically by the in-portal "Manage Access" panel below - no manual setup.)
- * 2. Deploy > New deployment > Web app.
+ * 2. Deploy > New deployment > Web app (for human visitors).
  *    - Execute as: User accessing the web app
  *    - Who has access: Anyone with a Google account
- * 3. In the Fetcher project, set PORTAL_URL to this deployment's URL, then run
- *    ensureRefreshTrigger_() once there to start the 5-minute background push,
- *    and refreshAndPush_() once immediately after so this cache isn't empty
- *    before the first trigger fires.
+ *    Also: Deploy > New deployment > Library (for the Fetcher to call pushData).
+ *    Note this deployment's Script ID and version.
+ * 3. In the Fetcher project, add this project as a library (using the Script ID
+ *    and version from step 2), then run ensureRefreshTrigger_() once there to
+ *    start the 1-minute background push, and refreshAndPush_() once immediately
+ *    after so this cache isn't empty before the first trigger fires.
  * 4. Share the deployment URL. Add each PIC/Viewer/Admin via the in-portal "Manage Access"
  *    panel (Admins only). There is deliberately no Google Sheet involved anywhere in
  *    this project: who-has-access-to-what is sensitive (it shows every PIC's outlet
@@ -152,7 +161,13 @@ function doGetInner_(email) {
     }
   }
 
-  return HtmlOutput_('Onboarding Status', renderShell_(countries, email, isAdmin, roleLabel));
+  return HtmlOutput_('Onboarding Status', renderShell_(countries, email, isAdmin, roleLabel, getLastSynced_()));
+}
+
+// When the Fetcher last successfully pushed data, so the dashboard can show PICs
+// that this isn't a static snapshot - see the "Refreshes every minute" header line.
+function getLastSynced_() {
+  return CacheService.getScriptCache().get('clickup_last_synced');
 }
 
 function ClickUpError_(message, detail) {
@@ -163,34 +178,37 @@ function ClickUpError_(message, detail) {
 ClickUpError_.prototype = Object.create(Error.prototype);
 
 // Receives the ClickUp Fetcher project's periodic push (see file header comment) and
-// writes it into this project's own cache. Guarded by a shared secret rather than by
-// who's signed in - the Fetcher calls this as itself, not as any particular viewer,
-// and this project intentionally has no other way to tell "the Fetcher" apart from
-// "anyone else with a Google account" (that's the whole point of the split).
-function doPost(e) {
-  var secret = PropertiesService.getScriptProperties().getProperty('PUSH_SECRET');
-  try {
-    var body = JSON.parse(e.postData.contents);
-    if (!secret || body.secret !== secret) {
-      return ContentService.createTextOutput('Forbidden').setMimeType(ContentService.MimeType.TEXT);
-    }
-    var cache = CacheService.getScriptCache();
-    COUNTRIES.forEach(function (c) {
-      if (body.data && body.data.tasks && body.data.tasks[c.code]) {
-        cache.put('clickup_tasks_' + c.code, JSON.stringify(body.data.tasks[c.code]), 21600);
-      }
-      if (body.data && body.data.outlets && body.data.outlets[c.code]) {
-        cache.put('clickup_outlets_' + c.code, JSON.stringify(body.data.outlets[c.code]), 21600);
-      }
-    });
-    return ContentService.createTextOutput('OK').setMimeType(ContentService.MimeType.TEXT);
-  } catch (err) {
-    return ContentService.createTextOutput('Error: ' + err).setMimeType(ContentService.MimeType.TEXT);
+// writes it into this project's own cache. Called as a Library function, not over
+// HTTP: this Workspace domain's web app deployments (tried both "Anyone with a Google
+// account" and "Only myself") reject every server-to-server call regardless of what
+// Authorization token the Fetcher sends - neither ScriptApp.getOAuthToken() nor
+// getIdentityToken() satisfies the platform's own sign-in gate, so a doPost-based
+// webhook simply cannot work here. A Library call sidesteps that gate entirely: it's
+// an in-process function call, not an HTTP request, so there's no sign-in check to
+// fail. Guarded by a shared secret rather than by who's signed in - the Fetcher calls
+// this as itself, not as any particular viewer, and this project intentionally has no
+// other way to tell "the Fetcher" apart from anyone else who might get hold of this
+// project's Script ID and add it as a library.
+function pushData(secret, data) {
+  var expected = PropertiesService.getScriptProperties().getProperty('PUSH_SECRET');
+  if (!expected || secret !== expected) {
+    throw new Error('Forbidden');
   }
+  var cache = CacheService.getScriptCache();
+  COUNTRIES.forEach(function (c) {
+    if (data && data.tasks && data.tasks[c.code]) {
+      cache.put('clickup_tasks_' + c.code, JSON.stringify(data.tasks[c.code]), 21600);
+    }
+    if (data && data.outlets && data.outlets[c.code]) {
+      cache.put('clickup_outlets_' + c.code, JSON.stringify(data.outlets[c.code]), 21600);
+    }
+  });
+  cache.put('clickup_last_synced', new Date().toISOString(), 21600);
+  return 'OK';
 }
 
 // Request-path read: the dashboard's onboarding rows, from the cache the Fetcher project
-// keeps warm via doPost - never a live ClickUp call. See file header comment for why.
+// keeps warm via pushData - never a live ClickUp call. See file header comment for why.
 function getClickUpTasks_(country) {
   var raw = CacheService.getScriptCache().get('clickup_tasks_' + country.code);
   if (!raw) {
@@ -441,7 +459,7 @@ function removeOutletCategory(countryCode, outlet) {
 
 // ---- Page shell: header + country toggle + filter select + empty client-rendered dashboard ----
 
-function renderShell_(countries, email, isAdmin, roleLabel) {
+function renderShell_(countries, email, isAdmin, roleLabel, lastSynced) {
   var clientCountries = countries.map(function (c) {
     var clientRows = c.rows.map(function (r) {
       return {
@@ -462,6 +480,7 @@ function renderShell_(countries, email, isAdmin, roleLabel) {
       '<div>' +
         '<h1>Onboarding Status</h1>' +
         '<div class="muted" id="headerLabel">' + escapeHtml_(countries[0].outletsLabel) + '</div>' +
+        '<div class="muted" id="syncLabel" style="font-size:12px;"></div>' +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:12px;">' +
         (isAdmin ? '<button class="manage-btn" onclick="openAccessPanel()">Manage Access</button>' : '') +
@@ -474,6 +493,8 @@ function renderShell_(countries, email, isAdmin, roleLabel) {
     '<script>' + clientEngine_() +
       '\nvar COUNTRIES=' + countriesJson + ';' +
       '\nvar CURRENT=COUNTRIES[0].code;' +
+      '\nvar LAST_SYNCED=' + JSON.stringify(lastSynced || null) + ';' +
+      '\ndocument.getElementById("syncLabel").textContent="Refreshes automatically every minute"+(LAST_SYNCED?(" · Last updated "+fmtTime(LAST_SYNCED)):"");' +
       '\ninitFilterBar();\nrender("");\n<\/script>';
 }
 
@@ -486,6 +507,7 @@ function clientEngine_() {
     'var DEFAULT_COLOR="#8b8f97";' +
     'function esc(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}' +
     'function fmtDate(iso){if(!iso)return "";var d=new Date(iso);return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});}' +
+    'function fmtTime(iso){if(!iso)return "";var d=new Date(iso);return d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});}' +
     'function mondayOf(d){var date=new Date(d);var day=date.getDay();date.setDate(date.getDate()+(day===0?-6:1-day));date.setHours(0,0,0,0);return date;}' +
     'function statCard(value,label){return "<div class=\\"stat-card\\"><div class=\\"stat-value\\">"+value+"</div><div class=\\"stat-label\\">"+esc(label)+"</div></div>";}' +
     'function buildStatCards(rows){' +
