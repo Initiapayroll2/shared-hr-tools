@@ -789,7 +789,10 @@ function clientEngine_() {
       'document.getElementById("categoriesModalContent").innerHTML="<p class=\\"muted\\">Loading\\u2026</p>";' +
       'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(categoriesPanelError).listOutletCategories();' +
     '}' +
-    'function closeCategoriesPanel(){document.getElementById("categoriesModal").style.display="none";}' +
+    'function closeCategoriesPanel(){' +
+      'document.getElementById("categoriesModal").style.display="none";' +
+      'document.getElementById("accessModal").style.display="none";' +
+    '}' +
     'function categoriesPanelError(err){' +
       'var msg=err&&err.message?err.message:String(err);' +
       'var box=document.getElementById("categoriesModalContent");' +
