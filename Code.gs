@@ -2,37 +2,75 @@
  * F&B PT Onboarding Portal
  * Shows each PIC only the onboarding status rows for their own outlet(s).
  *
- * This project deliberately contains NO ClickUp/UrlFetchApp code and NO trigger
- * setup (ScriptApp). That's a second, separate Apps Script project - the
+ * SIGN-IN: this deployment runs "Execute as: Me" (the developer), not "User
+ * accessing the web app". Under "User accessing the web app", Apps Script makes
+ * every visitor grant this project's own permissions - whatever scopes the code
+ * uses, e.g. PropertiesService/CacheService/UrlFetchApp - before they can see
+ * anything, via a grey, native "(Unverified)" Apps Script screen. That screen
+ * shows once per visitor and is unavoidable under that mode no matter how
+ * minimal the scopes are - it's not related to whether the OAuth consent
+ * screen itself is published/verified. Under "Execute as: Me", only the
+ * developer's own authorization ever matters, so instead visitors go through a
+ * real "Sign in with Google" button - a normal OAuth 2.0 flow using a separate
+ * "Portal Sign-In" OAuth client (not Apps Script's own auto-managed one) - that
+ * just proves who they are, no permission grant at all. See doGet/signInPage_/
+ * exchangeCodeForEmail_ below. Because visitors never get an implicit Apps
+ * Script identity this way, this project can't rely on Session.getActiveUser()
+ * - every admin/viewer check below takes an explicit, HMAC-signed session token
+ * instead (see signSession_/verifySession_), threaded from doGet's URL through
+ * to every google.script.run call the client makes.
+ * The sign-in link opens in a new tab (target="_blank"), not the same tab -
+ * Apps Script's HtmlService always serves this project's output inside its own
+ * sandboxed iframe, which is deliberately not granted allow-top-navigation, so
+ * a same-tab redirect back to a clean URL after Google's OAuth callback isn't
+ * possible here; doGet renders the dashboard directly in that new tab instead
+ * once the code exchange succeeds, rather than trying to bounce anywhere else.
+ *
+ * This project deliberately contains NO ClickUp-polling/trigger code
+ * (ScriptApp.newTrigger). That's a second, separate Apps Script project - the
  * "ClickUp Fetcher" - which nobody but the owner ever opens: it polls ClickUp
  * every minute and pushes the result here (see pushData below), authenticated
- * by a shared secret. Why split it this way: Apps Script decides what
- * permissions a deployed web app needs by scanning the WHOLE project's code,
- * not just the code path a given request actually takes - so merely not
- * *calling* UrlFetchApp from doGet wasn't enough, its mere presence anywhere
- * in this project still made every first-time visitor click through a scary
- * "Google hasn't verified this app" warning to grant it. With that code moved
- * out entirely, this project's only required permission is basic sign-in, so
- * visitors never see that warning at all.
- * The push itself goes through Apps Script's Library mechanism (Fetcher adds this
- * project as a library and calls pushData(...) directly), not an HTTP webhook -
- * this Workspace domain's web app deployments reject every server-to-server call
- * regardless of access level ("Anyone with a Google account" and "Only myself"
- * were both tried) or Authorization token, so a doPost-based push cannot work
- * here at all. A library call is a plain in-process function call, so there's no
- * sign-in gate to fail.
+ * by a shared secret. The push itself goes through Apps Script's Library
+ * mechanism (Fetcher adds this project as a library and calls pushData(...)
+ * directly), not an HTTP webhook - this Workspace domain's web app deployments
+ * reject every server-to-server call regardless of access level ("Anyone with a
+ * Google account" and "Only myself" were both tried) or Authorization token, so
+ * a doPost-based push cannot work here at all. A library call is a plain
+ * in-process function call, so there's no sign-in gate to fail.
  * The dashboard (stat cards, by-outlet, by-status, table) re-renders entirely
- * client-side when the outlet filter changes - no page reload.
+ * client-side when the outlet filter changes - no page reload. The header's
+ * "Refresh" button works the same way, via getDashboardData(token) - this is
+ * deliberate, not just a nicety: a real browser reload would resend this
+ * tab's URL, which (per the SIGN-IN note above) still carries the original
+ * one-time OAuth "code" from sign-in, and Google always rejects a reused
+ * code. So a real reload eventually fails with "Sign-in failed" and forces
+ * the visitor to log in again - e.g. right after an Admin adds them a new
+ * outlet and asks them to refresh. The in-page Refresh button re-fetches
+ * fresh rows for the same session without ever reloading the page, so that
+ * never happens.
  *
  * SETUP:
  * 1. Script Properties (Project Settings > Script Properties):
- *    PUSH_SECRET = a long random string, must match the Fetcher project's own
- *    PUSH_SECRET exactly - it's how pushData knows a call actually came from it.
+ *    PUSH_SECRET         = a long random string, must match the Fetcher
+ *                          project's own PUSH_SECRET exactly - it's how
+ *                          pushData knows a call actually came from it.
+ *    OAUTH_CLIENT_ID     = the "Portal Sign-In" OAuth client's Client ID.
+ *    OAUTH_CLIENT_SECRET = ...its Client secret.
+ *                          (Google Cloud Console > APIs & Services / Google
+ *                          Auth Platform > Clients > Create client > Web
+ *                          application, with an Authorized redirect URI equal
+ *                          to this deployment's exec URL, exactly.)
+ *    SESSION_SECRET is generated automatically the first time anyone signs in -
+ *    never set it by hand, and never reset it while anyone might have a live
+ *    session (it immediately invalidates every signed-in visitor).
  *    (ADMINS, VIEWERS, PIC_MAPPINGS and OUTLET_CATEGORIES are all created/managed
  *    automatically by the in-portal "Manage Access" panel below - no manual setup.)
  * 2. Deploy > New deployment > Web app (for human visitors).
- *    - Execute as: User accessing the web app
- *    - Who has access: Anyone with a Google account
+ *    - Execute as: Me
+ *    - Who has access: Anyone
+ *    (This project's own doGet enforces sign-in itself - see SIGN-IN above - so
+ *    the deployment-level access setting is deliberately wide open; Google no
+ *    longer gates the raw URL at all, this script's own code does.)
  *    Also: Deploy > New deployment > Library (for the Fetcher to call pushData).
  *    Note this deployment's Script ID and version.
  * 3. In the Fetcher project, add this project as a library (using the Script ID
@@ -102,13 +140,40 @@ var ADMIN_ROLE_LABELS = { super: 'Super Admin', SG: 'SG Admin', MY: 'MY Admin' }
 // stored mappings and own ClickUp list - never matched against another country's
 // outlets or tasks.
 function doGet(e) {
-  var email = Session.getActiveUser().getEmail();
-  if (!email) {
-    return HtmlOutput_('Sign-in required', '<p>Please sign in with your Google account to view this page.</p>');
+  var params = (e && e.parameter) || {};
+  var execUrl = ScriptApp.getService().getUrl();
+
+  // Google redirected back from the "Sign in with Google" button below with
+  // either an auth code (success) or an error (denied/cancelled). This lands
+  // in a NEW TAB (see signInPage_'s target="_blank" - Apps Script's sandboxed
+  // iframe has no allow-top-navigation, so a same-tab redirect back to a clean
+  // "?token=..." URL isn't possible here); render the dashboard directly in
+  // that tab rather than trying to bounce anywhere else.
+  if (params.code) {
+    try {
+      var newEmail = exchangeCodeForEmail_(params.code, execUrl);
+      return renderDashboardOrError_(newEmail, signSession_(newEmail));
+    } catch (err) {
+      Logger.log('OAuth callback failed: ' + (err && err.message ? err.message : err));
+      return signInPage_(execUrl, 'Sign-in failed. Please try again.');
+    }
+  }
+  if (params.error) {
+    return signInPage_(execUrl, 'Sign-in was cancelled. Please try again.');
   }
 
+  // Normal page view - a browser that already completed sign-in carries its
+  // session token in the URL (see renderShell_'s embedded SESSION_TOKEN).
+  var email = params.token ? verifySession_(params.token) : null;
+  if (!email) {
+    return signInPage_(execUrl, null);
+  }
+  return renderDashboardOrError_(email, params.token);
+}
+
+function renderDashboardOrError_(email, token) {
   try {
-    return doGetInner_(email);
+    return doGetInner_(email, token);
   } catch (err) {
     if (err && err.isClickUpError) {
       Logger.log('ClickUp fetch failed for ' + email + ': ' + err.message + (err.detail ? ' | ' + err.detail : ''));
@@ -121,7 +186,13 @@ function doGet(e) {
   }
 }
 
-function doGetInner_(email) {
+// Shared by doGetInner_ (full page load) and getDashboardData (in-page Refresh
+// button) so both compute a signed-in visitor's countries/rows identically.
+// Returns { isAdmin, roleLabel, countries } on success, or { isAdmin, roleLabel,
+// countries: null, noAccessHtml, noAccessMessage } when nothing is configured
+// for them - noAccessHtml is the rich version for a full page render,
+// noAccessMessage a plain-text equivalent for a thrown Error (Refresh path).
+function computeDashboardCountries_(email) {
   var adminScope = getAdminCountryScope_(email); // 'super' | 'SG' | 'MY' | null
   var isAdmin = adminScope !== null;
   var viewerScope = isAdmin ? null : getViewerScope_(email);
@@ -184,9 +255,14 @@ function doGetInner_(email) {
       });
     });
     if (countries.length === 0) {
-      return HtmlOutput_('No access configured',
-        '<p>No ' + escapeHtml_(CATEGORY_LABELS[viewerScope] || viewerScope) + ' outlets found for <b>' + escapeHtml_(email) + '</b> right now.</p>' +
-        '<p>Contact HR if this looks wrong.</p>');
+      return {
+        isAdmin: isAdmin,
+        roleLabel: roleLabel,
+        countries: null,
+        noAccessHtml: '<p>No ' + escapeHtml_(CATEGORY_LABELS[viewerScope] || viewerScope) + ' outlets found for <b>' + escapeHtml_(email) + '</b> right now.</p>' +
+          '<p>Contact HR if this looks wrong.</p>',
+        noAccessMessage: 'No ' + (CATEGORY_LABELS[viewerScope] || viewerScope) + ' outlets found for ' + email + ' right now. Contact HR if this looks wrong.'
+      };
     }
   } else {
     countries = [];
@@ -199,13 +275,142 @@ function doGetInner_(email) {
       countries.push({ code: c.code, label: c.label, outletsLabel: outletOptions.join(', '), rows: rows, outlets: outletOptions });
     });
     if (countries.length === 0) {
-      return HtmlOutput_('No access configured',
-        '<p>No outlet is set up for <b>' + escapeHtml_(email) + '</b>.</p>' +
-        '<p>Contact HR to be added to the onboarding portal.</p>');
+      return {
+        isAdmin: isAdmin,
+        roleLabel: roleLabel,
+        countries: null,
+        noAccessHtml: '<p>No outlet is set up for <b>' + escapeHtml_(email) + '</b>.</p>' +
+          '<p>Contact HR to be added to the onboarding portal.</p>',
+        noAccessMessage: 'No outlet is set up for ' + email + '. Contact HR to be added to the onboarding portal.'
+      };
     }
   }
 
-  return HtmlOutput_('Onboarding Status', renderShell_(countries, email, isAdmin, roleLabel, getLastSynced_()));
+  return { isAdmin: isAdmin, roleLabel: roleLabel, countries: countries };
+}
+
+function doGetInner_(email, token) {
+  var result = computeDashboardCountries_(email);
+  if (!result.countries) {
+    return HtmlOutput_('No access configured', result.noAccessHtml);
+  }
+  return HtmlOutput_('Onboarding Status', renderShell_(result.countries, email, result.isAdmin, result.roleLabel, getLastSynced_(), token));
+}
+
+// ---- Sign-in: OAuth 2.0 "Sign in with Google" + a self-contained signed session token ----
+// See the file header's SIGN-IN section for why this exists instead of
+// Session.getActiveUser(). The token is stateless - email + expiry, HMAC-signed
+// with a secret only this script knows - so the client can carry it (in the
+// page URL, then in every google.script.run call) without this script needing
+// to remember any session itself. 12 hours balances not re-prompting mid-shift
+// against a lost/shared link going stale reasonably soon.
+
+function signInPage_(execUrl, errorMessage) {
+  var clientId = PropertiesService.getScriptProperties().getProperty('OAUTH_CLIENT_ID');
+  var authUrl = 'https://accounts.google.com/o/oauth2/v2/auth'
+    + '?client_id=' + encodeURIComponent(clientId)
+    + '&redirect_uri=' + encodeURIComponent(execUrl)
+    + '&response_type=code'
+    + '&scope=' + encodeURIComponent('openid email')
+    + '&prompt=select_account';
+  var body = '' +
+    '<div style="max-width:360px;margin:14vh auto 0;text-align:center;">' +
+      '<h1 style="font-size:20px;margin:0 0 8px;">F&amp;B PT Onboarding Portal</h1>' +
+      (errorMessage ? '<p style="color:#c0392b;font-size:13px;">' + escapeHtml_(errorMessage) + '</p>' : '') +
+      '<p class="muted" style="margin-bottom:22px;">Sign in with your work Google account to continue.</p>' +
+      '<a href="' + authUrl + '" target="_blank" style="display:inline-block;background:#1c1c1c;color:#fff;text-decoration:none;padding:10px 24px;border-radius:24px;font-size:14px;">Sign in with Google</a>' +
+    '</div>';
+  return HtmlOutput_('Sign in', body);
+}
+
+// Exchanges the OAuth code Google just redirected back with for the signed-in
+// user's email - a server-to-server call using this project's own "Portal
+// Sign-In" OAuth client (never the visitor's own credentials), so it runs
+// under Execute-as-Me's authorization only, exactly like pushData/UrlFetchApp
+// elsewhere in this file - no visitor ever grants this script anything.
+function exchangeCodeForEmail_(code, execUrl) {
+  var props = PropertiesService.getScriptProperties();
+  var clientId = props.getProperty('OAUTH_CLIENT_ID');
+  var clientSecret = props.getProperty('OAUTH_CLIENT_SECRET');
+  if (!clientId || !clientSecret) throw new Error('OAUTH_CLIENT_ID/OAUTH_CLIENT_SECRET not configured.');
+
+  var tokenResp = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', {
+    method: 'post',
+    payload: {
+      code: code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: execUrl,
+      grant_type: 'authorization_code'
+    },
+    muteHttpExceptions: true
+  });
+  var tokenRaw = tokenResp.getContentText();
+  var tokenData;
+  try {
+    tokenData = JSON.parse(tokenRaw);
+  } catch (parseErr) {
+    throw new Error('Token endpoint returned a non-JSON response (HTTP ' + tokenResp.getResponseCode() + ').');
+  }
+  if (!tokenData.access_token) {
+    Logger.log('Token endpoint HTTP ' + tokenResp.getResponseCode() + ' redirect_uri=' + execUrl + ' body=' + tokenRaw);
+    throw new Error('Token exchange failed: ' + (tokenData.error_description || tokenData.error || 'unknown error'));
+  }
+
+  var userResp = UrlFetchApp.fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: { Authorization: 'Bearer ' + tokenData.access_token },
+    muteHttpExceptions: true
+  });
+  var userData = JSON.parse(userResp.getContentText());
+  if (!userData.email || userData.email_verified === false) {
+    throw new Error('Could not verify a Google account email.');
+  }
+  return userData.email;
+}
+
+// Generated on first use and persisted - never hardcoded, never shared with the
+// Fetcher project (unlike PUSH_SECRET, this one has nothing to match against).
+function getSessionSecret_() {
+  var props = PropertiesService.getScriptProperties();
+  var secret = props.getProperty('SESSION_SECRET');
+  if (!secret) {
+    secret = Utilities.getUuid() + Utilities.getUuid();
+    props.setProperty('SESSION_SECRET', secret);
+  }
+  return secret;
+}
+
+function hmacHex_(payload) {
+  return Utilities.computeHmacSha256Signature(payload, getSessionSecret_())
+    .map(function (b) { return ('0' + (b & 0xFF).toString(16)).slice(-2); })
+    .join('');
+}
+
+function signSession_(email) {
+  var expiry = Math.floor(Date.now() / 1000) + 12 * 3600;
+  var payload = email + '|' + expiry;
+  return Utilities.base64EncodeWebSafe(payload) + '.' + hmacHex_(payload);
+}
+
+// Returns the email the token was signed for, or null if missing, malformed,
+// expired, or tampered with (bad signature).
+function verifySession_(token) {
+  if (!token) return null;
+  var parts = String(token).split('.');
+  if (parts.length !== 2) return null;
+  var payload;
+  try {
+    payload = Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString();
+  } catch (e) {
+    return null;
+  }
+  var pieces = payload.split('|');
+  if (pieces.length !== 2) return null;
+  var email = pieces[0];
+  var expiry = Number(pieces[1]);
+  if (!email || !expiry || Math.floor(Date.now() / 1000) > expiry) return null;
+  if (hmacHex_(payload) !== parts[1]) return null;
+  return email;
 }
 
 // When the Fetcher last successfully pushed data, so the dashboard can show PICs
@@ -393,21 +598,29 @@ function getOutletsForEmail_(email, countryCode) {
 // callable directly from a browser console by anyone signed in, so the server-side check
 // is the real boundary.
 
-function requireAdmin_() {
-  var email = Session.getActiveUser().getEmail();
+// For endpoints any signed-in visitor may call (Admin, Viewer, or plain PIC
+// alike) - just proves there's still a valid session, no role check.
+function requireSession_(token) {
+  var email = verifySession_(token);
+  if (!email) throw new Error('Your session has expired. Please sign in again.');
+  return email;
+}
+
+function requireAdmin_(token) {
+  var email = verifySession_(token);
   if (!email || !isAdmin_(email)) throw new Error('Not authorized.');
   return email;
 }
 
-function requireSuperAdmin_() {
-  var email = Session.getActiveUser().getEmail();
+function requireSuperAdmin_(token) {
+  var email = verifySession_(token);
   if (!email || !isSuperAdmin_(email)) throw new Error('Not authorized.');
   return email;
 }
 
 // A Super Admin can act for any country; a country-scoped Admin only for their own.
-function requireCountryAdmin_(countryCode) {
-  var email = Session.getActiveUser().getEmail();
+function requireCountryAdmin_(token, countryCode) {
+  var email = verifySession_(token);
   var scope = email ? getAdminCountryScope_(email) : null;
   if (!scope || (scope !== 'super' && scope !== countryCode)) throw new Error('Not authorized.');
   return email;
@@ -418,8 +631,8 @@ function requireCountryAdmin_(countryCode) {
 // matching their own country - never the cross-country 'all' or category scopes
 // (fnb/salon/others/group_management), which stay Super-Admin-only since they can
 // expose the other country's outlets.
-function requireViewerScopePermission_(scope) {
-  var email = Session.getActiveUser().getEmail();
+function requireViewerScopePermission_(token, scope) {
+  var email = verifySession_(token);
   var callerScope = email ? getAdminCountryScope_(email) : null;
   if (!callerScope) throw new Error('Not authorized.');
   if (callerScope === 'super') return email;
@@ -436,8 +649,8 @@ function isValidEmail_(email) {
 // the other country / spanning both (only "their" SG-or-MY Viewer scope). A Super
 // Admin gets everything; outlet categories live on their own page now (see
 // listOutletCategories), not here.
-function listAccess() {
-  var email = requireAdmin_();
+function listAccess(token) {
+  var email = requireAdmin_(token);
   var scope = getAdminCountryScope_(email);
   if (scope === 'super') {
     return { scope: 'super', admins: getAdmins_(), viewers: getViewers_(), mappings: getMappings_() };
@@ -449,8 +662,8 @@ function listAccess() {
   };
 }
 
-function addAdmin(email, scope) {
-  requireSuperAdmin_();
+function addAdmin(token, email, scope) {
+  requireSuperAdmin_(token);
   email = String(email || '').trim();
   if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
   if (ADMIN_SCOPES.indexOf(scope) === -1) throw new Error('Unknown admin scope.');
@@ -461,25 +674,25 @@ function addAdmin(email, scope) {
   }
   admins.push({ email: email, scope: scope });
   saveAdmins_(admins);
-  return listAccess();
+  return listAccess(token);
 }
 
-function removeAdmin(email) {
-  requireSuperAdmin_();
+function removeAdmin(token, email) {
+  requireSuperAdmin_(token);
   var target = String(email || '').trim().toLowerCase();
   var admins = getAdmins_();
   var remaining = admins.filter(function (a) { return a.email.toLowerCase() !== target; });
-  if (remaining.length === admins.length) return listAccess();
+  if (remaining.length === admins.length) return listAccess(token);
   if (!remaining.some(function (a) { return a.scope === 'super'; })) {
     throw new Error('Cannot remove the last Super Admin.');
   }
   saveAdmins_(remaining);
-  return listAccess();
+  return listAccess(token);
 }
 
-function addViewer(email, scope) {
+function addViewer(token, email, scope) {
   if (VALID_SCOPES.indexOf(scope) === -1) throw new Error('Unknown scope.');
-  requireViewerScopePermission_(scope);
+  requireViewerScopePermission_(token, scope);
   email = String(email || '').trim();
   if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
   var emailLower = email.toLowerCase();
@@ -490,24 +703,24 @@ function addViewer(email, scope) {
   var viewers = getViewers_().filter(function (v) { return v.email.toLowerCase() !== emailLower; });
   viewers.push({ email: email, scope: scope });
   saveViewers_(viewers);
-  return listAccess();
+  return listAccess(token);
 }
 
-function removeViewer(email) {
-  var caller = requireAdmin_();
+function removeViewer(token, email) {
+  var caller = requireAdmin_(token);
   var callerScope = getAdminCountryScope_(caller);
   var emailLower = String(email || '').trim().toLowerCase();
   var viewers = getViewers_();
   var target = viewers.filter(function (v) { return v.email.toLowerCase() === emailLower; })[0];
-  if (!target) return listAccess();
+  if (!target) return listAccess(token);
   if (callerScope !== 'super' && target.scope !== callerScope) throw new Error('Not authorized.');
   var remaining = viewers.filter(function (v) { return v.email.toLowerCase() !== emailLower; });
   saveViewers_(remaining);
-  return listAccess();
+  return listAccess(token);
 }
 
-function addPicMapping(countryCode, email, outlet) {
-  requireCountryAdmin_(countryCode);
+function addPicMapping(token, countryCode, email, outlet) {
+  requireCountryAdmin_(token, countryCode);
   var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
   if (!country) throw new Error('Unknown country.');
   email = String(email || '').trim();
@@ -523,18 +736,18 @@ function addPicMapping(countryCode, email, outlet) {
   if (exists) throw new Error(email + ' already has access to ' + outlet + '.');
   mappings.push({ country: countryCode, email: email, outlet: outlet });
   saveMappings_(mappings);
-  return listAccess();
+  return listAccess(token);
 }
 
-function removePicMapping(countryCode, email, outlet) {
-  requireCountryAdmin_(countryCode);
+function removePicMapping(token, countryCode, email, outlet) {
+  requireCountryAdmin_(token, countryCode);
   var emailLower = String(email || '').trim().toLowerCase();
   var outletLower = String(outlet || '').trim().toLowerCase();
   var mappings = getMappings_().filter(function (m) {
     return !(m.country === countryCode && m.email.toLowerCase() === emailLower && m.outlet.toLowerCase() === outletLower);
   });
   saveMappings_(mappings);
-  return listAccess();
+  return listAccess(token);
 }
 
 // Categories an outlet can be tagged with. Excludes 'all'/'SG'/'MY' - those are valid
@@ -544,8 +757,8 @@ var VALID_CATEGORIES = VALID_SCOPES.filter(function (s) { return s !== 'all' && 
 
 // Read by the separate Manage Outlet Categories panel - Super Admin only, unlike
 // listAccess which any Admin can call.
-function listOutletCategories() {
-  requireSuperAdmin_();
+function listOutletCategories(token) {
+  requireSuperAdmin_(token);
   return {
     categories: getOutletCategories_(),
     countries: COUNTRIES.map(function (c) {
@@ -554,8 +767,8 @@ function listOutletCategories() {
   };
 }
 
-function addOutletCategory(countryCode, outlet, category) {
-  requireSuperAdmin_();
+function addOutletCategory(token, countryCode, outlet, category) {
+  requireSuperAdmin_(token);
   var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
   if (!country) throw new Error('Unknown country.');
   outlet = String(outlet || '').trim();
@@ -569,23 +782,26 @@ function addOutletCategory(countryCode, outlet, category) {
   });
   categories.push({ country: countryCode, outlet: outlet, category: category });
   saveOutletCategories_(categories);
-  return listOutletCategories();
+  return listOutletCategories(token);
 }
 
-function removeOutletCategory(countryCode, outlet) {
-  requireSuperAdmin_();
+function removeOutletCategory(token, countryCode, outlet) {
+  requireSuperAdmin_(token);
   var outletLower = String(outlet || '').trim().toLowerCase();
   var categories = getOutletCategories_().filter(function (c) {
     return !(c.country === countryCode && String(c.outlet || '').trim().toLowerCase() === outletLower);
   });
   saveOutletCategories_(categories);
-  return listOutletCategories();
+  return listOutletCategories(token);
 }
 
 // ---- Page shell: header + country toggle + filter select + empty client-rendered dashboard ----
 
-function renderShell_(countries, email, isAdmin, roleLabel, lastSynced) {
-  var clientCountries = countries.map(function (c) {
+// Converts server-side country/row objects (which may hold real Date objects)
+// into the plain, JSON-safe shape the client-side engine expects - shared by
+// the initial page render and getDashboardData's in-page Refresh response.
+function clientCountries_(countries) {
+  return countries.map(function (c) {
     var clientRows = c.rows.map(function (r) {
       return {
         outlet: r.outlet,
@@ -598,6 +814,26 @@ function renderShell_(countries, email, isAdmin, roleLabel, lastSynced) {
     });
     return { code: c.code, label: c.label, outletsLabel: c.outletsLabel, rows: clientRows, outlets: c.outlets };
   });
+}
+
+// Lets the client re-fetch fresh rows/outlets for its already-signed-in session
+// without a full page reload - see the file header's SIGN-IN note on why a real
+// reload (which resends this tab's original, already-consumed OAuth code) can't
+// be used for this instead.
+function getDashboardData(token) {
+  var email = requireSession_(token);
+  var result = computeDashboardCountries_(email);
+  if (!result.countries) {
+    throw new Error(result.noAccessMessage);
+  }
+  return {
+    countries: clientCountries_(result.countries),
+    lastSynced: getLastSynced_()
+  };
+}
+
+function renderShell_(countries, email, isAdmin, roleLabel, lastSynced, token) {
+  var clientCountries = clientCountries_(countries);
   var countriesJson = JSON.stringify(clientCountries).replace(/</g, '\\u003c');
 
   return '' +
@@ -608,6 +844,7 @@ function renderShell_(countries, email, isAdmin, roleLabel, lastSynced) {
         '<div class="muted" id="syncLabel" style="font-size:12px;"></div>' +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:12px;">' +
+        '<button class="manage-btn" id="refreshBtn" onclick="doRefresh()">Refresh</button>' +
         (isAdmin ? '<button class="manage-btn" onclick="openAccessPanel()">Manage Access</button>' : '') +
         '<div class="muted">' + escapeHtml_(email) + (roleLabel ? ' \u00B7 ' + escapeHtml_(roleLabel) : '') + '</div>' +
       '</div>' +
@@ -617,6 +854,7 @@ function renderShell_(countries, email, isAdmin, roleLabel, lastSynced) {
     '<div id="accessModal" class="modal-overlay" style="display:none;"><div class="modal" id="accessModalContent"></div></div>' +
     '<div id="categoriesModal" class="modal-overlay" style="display:none;"><div class="modal" id="categoriesModalContent"></div></div>' +
     '<script>' + clientEngine_() +
+      '\nvar SESSION_TOKEN=' + JSON.stringify(token || '') + ';' +
       '\nvar COUNTRIES=' + countriesJson + ';' +
       '\nvar CURRENT=COUNTRIES[0].code;' +
       '\nvar LAST_SYNCED=' + JSON.stringify(lastSynced || null) + ';' +
@@ -708,6 +946,30 @@ function clientEngine_() {
       'if(rows.length===0){el.innerHTML=emptyState(selected);return;}' +
       'el.innerHTML=buildStatCards(rows)+buildOutletBreakdown(rows,selected)+buildStatusBar(rows)+buildGroupedTable(rows);' +
     '}' +
+    'function doRefresh(){' +
+      'var btn=document.getElementById("refreshBtn");' +
+      'if(btn){btn.disabled=true;btn.textContent="Refreshing\\u2026";}' +
+      'google.script.run.withSuccessHandler(applyRefresh).withFailureHandler(refreshError).getDashboardData(SESSION_TOKEN);' +
+    '}' +
+    'function applyRefresh(data){' +
+      'COUNTRIES=data.countries;' +
+      'LAST_SYNCED=data.lastSynced;' +
+      'var stillExists=false;' +
+      'for(var i=0;i<COUNTRIES.length;i++){if(COUNTRIES[i].code===CURRENT)stillExists=true;}' +
+      'if(!stillExists)CURRENT=COUNTRIES[0].code;' +
+      'var lbl=document.getElementById("headerLabel");' +
+      'if(lbl)lbl.textContent=findCountry(CURRENT).outletsLabel;' +
+      'document.getElementById("syncLabel").textContent="Refreshes automatically every minute"+(LAST_SYNCED?(" \\u00B7 Last updated "+fmtTime(LAST_SYNCED)):"");' +
+      'renderFilterBar();' +
+      'render("");' +
+      'var btn=document.getElementById("refreshBtn");' +
+      'if(btn){btn.disabled=false;btn.textContent="Refresh";}' +
+    '}' +
+    'function refreshError(err){' +
+      'var btn=document.getElementById("refreshBtn");' +
+      'if(btn){btn.disabled=false;btn.textContent="Refresh";}' +
+      'alert("Couldn\\u2019t refresh: "+(err&&err.message?err.message:String(err)));' +
+    '}' +
     'var LAST_ACCESS_DATA=null;' +
     'var SCOPE_LABELS={all:"Super Viewer",SG:"SG Viewer",MY:"MY Viewer",fnb:"F&B only",salon:"Salon only",others:"Others only",group_management:"Group Management only"};' +
     'function viewerScopeOptionsFor(dataScope){' +
@@ -719,7 +981,7 @@ function clientEngine_() {
     'function openAccessPanel(){' +
       'document.getElementById("accessModal").style.display="flex";' +
       'document.getElementById("accessModalContent").innerHTML="<p class=\\"muted\\">Loading\\u2026</p>";' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(accessPanelError).listAccess();' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(accessPanelError).listAccess(SESSION_TOKEN);' +
     '}' +
     'function closeAccessPanel(){document.getElementById("accessModal").style.display="none";}' +
     'function accessPanelError(err){' +
@@ -797,7 +1059,7 @@ function clientEngine_() {
       'var optimistic=prevData.admins.concat([{email:email,scope:scope}]);' +
       'renderAccessPanel(withAccessField(prevData,"admins",optimistic));' +
       'el.value="";' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("adminError");if(e)e.textContent=err&&err.message?err.message:String(err);}).addAdmin(email,scope);' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("adminError");if(e)e.textContent=err&&err.message?err.message:String(err);}).addAdmin(SESSION_TOKEN,email,scope);' +
     '}' +
     'function doRemoveAdmin(i){' +
       'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.admins[i])return;' +
@@ -807,7 +1069,7 @@ function clientEngine_() {
       'var prevData=LAST_ACCESS_DATA;' +
       'var optimistic=prevData.admins.filter(function(a,idx){return idx!==i;});' +
       'renderAccessPanel(withAccessField(prevData,"admins",optimistic));' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("topAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeAdmin(email);' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("topAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeAdmin(SESSION_TOKEN,email);' +
     '}' +
     'function doAddViewer(){' +
       'var emailEl=document.getElementById("newViewerEmail");' +
@@ -822,7 +1084,7 @@ function clientEngine_() {
       'var optimistic=prevData.viewers.filter(function(v){return v.email.toLowerCase()!==emailLower;}).concat([{email:email,scope:scope}]);' +
       'renderAccessPanel(withAccessField(prevData,"viewers",optimistic));' +
       'emailEl.value="";' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("viewerError");if(e)e.textContent=err&&err.message?err.message:String(err);}).addViewer(email,scope);' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("viewerError");if(e)e.textContent=err&&err.message?err.message:String(err);}).addViewer(SESSION_TOKEN,email,scope);' +
     '}' +
     'function doRemoveViewer(i){' +
       'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.viewers[i])return;' +
@@ -832,7 +1094,7 @@ function clientEngine_() {
       'var prevData=LAST_ACCESS_DATA;' +
       'var optimistic=prevData.viewers.filter(function(v,idx){return idx!==i;});' +
       'renderAccessPanel(withAccessField(prevData,"viewers",optimistic));' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("topAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeViewer(email);' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("topAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeViewer(SESSION_TOKEN,email);' +
     '}' +
     'function doAddMapping(countryCode){' +
       'var emailEl=document.getElementById("newPicEmail_"+countryCode);' +
@@ -847,7 +1109,7 @@ function clientEngine_() {
       'var optimistic=prevData.mappings.concat([{country:countryCode,email:email,outlet:outlet}]);' +
       'renderAccessPanel(withAccessField(prevData,"mappings",optimistic));' +
       'emailEl.value="";outletEl.value="";' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("mappingError_"+countryCode);if(e)e.textContent=err&&err.message?err.message:String(err);}).addPicMapping(countryCode,email,outlet);' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("mappingError_"+countryCode);if(e)e.textContent=err&&err.message?err.message:String(err);}).addPicMapping(SESSION_TOKEN,countryCode,email,outlet);' +
     '}' +
     'function doRemoveMapping(idx){' +
       'if(!LAST_ACCESS_DATA||!LAST_ACCESS_DATA.mappings[idx])return;' +
@@ -857,7 +1119,7 @@ function clientEngine_() {
       'var prevData=LAST_ACCESS_DATA;' +
       'var optimistic=prevData.mappings.filter(function(x,i){return i!==idx;});' +
       'renderAccessPanel(withAccessField(prevData,"mappings",optimistic));' +
-      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("topAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removePicMapping(m.country,m.email,m.outlet);' +
+      'google.script.run.withSuccessHandler(renderAccessPanel).withFailureHandler(function(err){renderAccessPanel(prevData);var e=document.getElementById("topAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removePicMapping(SESSION_TOKEN,m.country,m.email,m.outlet);' +
     '}' +
     'var LAST_CATEGORY_DATA=null;' +
     'var OUTLET_CATEGORY_LABELS={fnb:"F&B",salon:"Salon",others:"Others",group_management:"Group Management"};' +
@@ -865,7 +1127,7 @@ function clientEngine_() {
     'function openCategoriesPanel(){' +
       'document.getElementById("categoriesModal").style.display="flex";' +
       'document.getElementById("categoriesModalContent").innerHTML="<p class=\\"muted\\">Loading\\u2026</p>";' +
-      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(categoriesPanelError).listOutletCategories();' +
+      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(categoriesPanelError).listOutletCategories(SESSION_TOKEN);' +
     '}' +
     'function closeCategoriesPanel(){' +
       'document.getElementById("categoriesModal").style.display="none";' +
@@ -912,7 +1174,7 @@ function clientEngine_() {
       'var optimistic=prevData.categories.filter(function(c){return !(c.country===countryCode&&c.outlet===outlet);});' +
       'optimistic.push({country:countryCode,outlet:outlet,category:category});' +
       'renderCategoriesPanel({countries:prevData.countries,categories:optimistic});' +
-      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){renderCategoriesPanel(prevData);var e=document.getElementById("categoryError_"+countryCode);if(e)e.textContent=err&&err.message?err.message:String(err);}).addOutletCategory(countryCode,outlet,category);' +
+      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){renderCategoriesPanel(prevData);var e=document.getElementById("categoryError_"+countryCode);if(e)e.textContent=err&&err.message?err.message:String(err);}).addOutletCategory(SESSION_TOKEN,countryCode,outlet,category);' +
     '}' +
     'function doRemoveCategory(idx){' +
       'if(!LAST_CATEGORY_DATA||!LAST_CATEGORY_DATA.categories[idx])return;' +
@@ -920,7 +1182,7 @@ function clientEngine_() {
       'var prevData=LAST_CATEGORY_DATA;' +
       'var optimistic=prevData.categories.filter(function(c,i){return i!==idx;});' +
       'renderCategoriesPanel({countries:prevData.countries,categories:optimistic});' +
-      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){renderCategoriesPanel(prevData);var e=document.getElementById("topCategoryError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeOutletCategory(cat.country,cat.outlet);' +
+      'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){renderCategoriesPanel(prevData);var e=document.getElementById("topCategoryError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeOutletCategory(SESSION_TOKEN,cat.country,cat.outlet);' +
     '}';
 }
 
@@ -978,6 +1240,7 @@ function HtmlOutput_(title, bodyHtml) {
       '.badge{display:inline-block;color:#fff;padding:3px 10px;border-radius:12px;font-size:12px;white-space:nowrap;}' +
 
       '.manage-btn{font-size:13px;padding:6px 16px;border-radius:20px;border:1px solid #1c1c1c;background:#fff;color:#1c1c1c;cursor:pointer;}' +
+      '.manage-btn:disabled{opacity:0.5;cursor:default;}' +
       '.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);align-items:center;justify-content:center;z-index:1000;}' +
       '.modal{background:#fff;border-radius:12px;padding:24px;max-width:640px;width:92%;max-height:85vh;overflow-y:auto;box-shadow:0 10px 40px rgba(0,0,0,0.2);position:relative;}' +
       '.modal h2{margin:0 0 4px 0;font-size:18px;}' +
