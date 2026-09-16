@@ -116,17 +116,46 @@ var COUNTRIES = [
   }
 ];
 
+// Category an outlet can be tagged with (the "Manage Outlet Categories" panel,
+// OUTLET_CATEGORIES) - kept independent of the Viewer *scopes* below, which
+// reuse these same four names as cross-country scopes, plus eight per-country
+// variants, so this list must never be derived from VALID_SCOPES (it used to
+// be, which would silently let the per-country scopes below be tagged onto an
+// outlet as if they were categories).
+var VALID_CATEGORIES = ['fnb', 'salon', 'others', 'group_management'];
+var CATEGORY_LABELS = { fnb: 'F&B', salon: 'Salon', others: 'Others', group_management: 'Group Management' };
+
 // Viewer scopes: 'all' ("Super Viewer") sees every outlet in both countries, unfiltered.
 // 'SG'/'MY' ("SG Viewer"/"MY Viewer") sees every outlet in just that one country,
 // unfiltered - a country-scoped Admin can grant only their own country's flavor of
-// this (see requireViewerScopePermission_ below). The rest ('fnb'/'salon'/'others'/
-// 'group_management') are category scopes that cut across both countries and depend
+// this (see requireViewerScopePermission_ below). 'fnb'/'salon'/'others'/
+// 'group_management' are category scopes that cut across both countries, depending
 // on OUTLET_CATEGORIES being set per outlet - see getOutletCategories_/
-// saveOutletCategories_ - and remain Super-Admin-only to grant, same as the
-// categories themselves.
-var VALID_SCOPES = ['all', 'SG', 'MY', 'fnb', 'salon', 'others', 'group_management'];
-var CATEGORY_LABELS = { all: 'All outlets', fnb: 'F&B', salon: 'Salon', others: 'Others', group_management: 'Group Management' };
+// saveOutletCategories_. The eight "<country>_<category>" scopes (e.g. "SG_fnb" =
+// "SG F&B only") are the same category filter restricted to a single country - an
+// "SG F&B only" Viewer never sees Malaysia's F&B outlets, even if some are tagged.
+// A country-scoped Admin can grant their own plain country scope or any of their
+// own country's four compound scopes; the four cross-country category scopes stay
+// Super-Admin-only to grant, same as the categories themselves (see
+// requireViewerScopePermission_/viewerScopeAllowedForCountryAdmin_ below).
+var VALID_SCOPES = [
+  'all', 'SG', 'MY',
+  'fnb', 'salon', 'others', 'group_management',
+  'SG_fnb', 'SG_salon', 'SG_others', 'SG_group_management',
+  'MY_fnb', 'MY_salon', 'MY_others', 'MY_group_management'
+];
 var VIEWER_COUNTRY_LABELS = { all: 'Super Viewer', SG: 'SG Viewer', MY: 'MY Viewer' };
+
+// Human label for a category or country+category Viewer scope (e.g. "F&B",
+// "SG · F&B") - never called for 'all'/'SG'/'MY', which VIEWER_COUNTRY_LABELS
+// covers instead.
+function viewerScopeCategoryLabel_(scope) {
+  var us = scope.indexOf('_');
+  if (us === -1) return CATEGORY_LABELS[scope] || scope;
+  var cc = scope.slice(0, us);
+  var cat = scope.slice(us + 1);
+  return cc + ' · ' + (CATEGORY_LABELS[cat] || cat);
+}
 
 // Admin scopes: 'super' manages both countries plus Admins/Viewers/outlet categories;
 // 'SG'/'MY' is a country-scoped Admin, restricted to that country's own dashboard and
@@ -198,7 +227,7 @@ function computeDashboardCountries_(email) {
   var viewerScope = isAdmin ? null : getViewerScope_(email);
   var roleLabel = adminScope ? ADMIN_ROLE_LABELS[adminScope]
     : (VIEWER_COUNTRY_LABELS[viewerScope] ? VIEWER_COUNTRY_LABELS[viewerScope]
-    : (viewerScope ? 'Viewer \u00B7 ' + (CATEGORY_LABELS[viewerScope] || viewerScope) : 'PIC'));
+    : (viewerScope ? 'Viewer \u00B7 ' + viewerScopeCategoryLabel_(viewerScope) : 'PIC'));
   var countries;
 
   if (adminScope === 'super' || viewerScope === 'all') {
@@ -233,6 +262,37 @@ function computeDashboardCountries_(email) {
       outletsLabel: viewerCountry.label + ' (all outlets)',
       rows: getClickUpTasks_(viewerCountry),
       outlets: getOutletOptionsForCountry_(viewerCountry)
+    }];
+  } else if (viewerScope && viewerScope.indexOf('_') !== -1) {
+    // Country + category scoped Viewer (e.g. "SG_fnb" = "SG F&B only"): the same
+    // category filter as the cross-country branch below, but restricted to just
+    // this one country - an "SG F&B only" Viewer never sees Malaysia's F&B
+    // outlets, even if some are tagged.
+    var compoundSplit = viewerScope.indexOf('_');
+    var compoundCC = viewerScope.slice(0, compoundSplit);
+    var compoundCategory = viewerScope.slice(compoundSplit + 1);
+    var compoundCountry = COUNTRIES.filter(function (c) { return c.code === compoundCC; })[0];
+    var compoundCategories = getOutletCategories_();
+    var compoundRows = compoundCountry ? getClickUpTasks_(compoundCountry).filter(function (t) {
+      return getOutletCategoryFor_(compoundCategories, compoundCC, t.outlet) === compoundCategory;
+    }) : [];
+    if (!compoundCountry || compoundRows.length === 0) {
+      var compoundCountryLabel = compoundCountry ? compoundCountry.label : compoundCC;
+      return {
+        isAdmin: isAdmin,
+        roleLabel: roleLabel,
+        countries: null,
+        noAccessHtml: '<p>No ' + escapeHtml_(CATEGORY_LABELS[compoundCategory] || compoundCategory) + ' outlets found in ' + escapeHtml_(compoundCountryLabel) + ' for <b>' + escapeHtml_(email) + '</b> right now.</p>' +
+          '<p>Contact HR if this looks wrong.</p>',
+        noAccessMessage: 'No ' + (CATEGORY_LABELS[compoundCategory] || compoundCategory) + ' outlets found in ' + compoundCountryLabel + ' for ' + email + ' right now. Contact HR if this looks wrong.'
+      };
+    }
+    countries = [{
+      code: compoundCountry.code,
+      label: compoundCountry.label,
+      outletsLabel: compoundCountry.label + ' (' + (CATEGORY_LABELS[compoundCategory] || compoundCategory) + ')',
+      rows: compoundRows,
+      outlets: uniqueOutlets_(compoundRows)
     }];
   } else if (viewerScope) {
     // Scoped Viewer (F&B / Salon / Others / Group Management): filter every country's
@@ -626,17 +686,30 @@ function requireCountryAdmin_(token, countryCode) {
   return email;
 }
 
+// True if a country-scoped Admin (callerScope 'SG'/'MY') may grant/revoke/see the
+// given Viewer scope: their own plain country scope, or any of their own
+// country's four "<their country>_<category>" compound scopes (e.g. an SG Admin
+// may grant "SG_fnb" but never "MY_fnb" or the cross-country "fnb"). Not consulted
+// for a Super Admin caller, who is always allowed regardless (checked separately
+// by every caller of this before falling back to it).
+function viewerScopeAllowedForCountryAdmin_(callerScope, scope) {
+  if (callerScope === scope) return true;
+  var us = scope.indexOf('_');
+  return us !== -1 && scope.slice(0, us) === callerScope;
+}
+
 // Gates granting/revoking a Viewer scope. A Super Admin can grant any scope. A
-// country-scoped Admin can only grant/revoke the "SG Viewer"/"MY Viewer" scope
-// matching their own country - never the cross-country 'all' or category scopes
-// (fnb/salon/others/group_management), which stay Super-Admin-only since they can
-// expose the other country's outlets.
+// country-scoped Admin can only grant/revoke their own plain country scope
+// ("SG Viewer"/"MY Viewer") or their own country's compound scopes ("SG F&B
+// only" etc, see viewerScopeAllowedForCountryAdmin_) - never the cross-country
+// 'all' or plain category scopes (fnb/salon/others/group_management), which
+// stay Super-Admin-only since they can expose the other country's outlets.
 function requireViewerScopePermission_(token, scope) {
   var email = verifySession_(token);
   var callerScope = email ? getAdminCountryScope_(email) : null;
   if (!callerScope) throw new Error('Not authorized.');
   if (callerScope === 'super') return email;
-  if (callerScope === scope) return email;
+  if (viewerScopeAllowedForCountryAdmin_(callerScope, scope)) return email;
   throw new Error('Not authorized.');
 }
 
@@ -657,7 +730,7 @@ function listAccess(token) {
   }
   return {
     scope: scope,
-    viewers: getViewers_().filter(function (v) { return v.scope === scope; }),
+    viewers: getViewers_().filter(function (v) { return viewerScopeAllowedForCountryAdmin_(scope, v.scope); }),
     mappings: getMappings_().filter(function (m) { return m.country === scope; })
   };
 }
@@ -713,7 +786,7 @@ function removeViewer(token, email) {
   var viewers = getViewers_();
   var target = viewers.filter(function (v) { return v.email.toLowerCase() === emailLower; })[0];
   if (!target) return listAccess(token);
-  if (callerScope !== 'super' && target.scope !== callerScope) throw new Error('Not authorized.');
+  if (callerScope !== 'super' && !viewerScopeAllowedForCountryAdmin_(callerScope, target.scope)) throw new Error('Not authorized.');
   var remaining = viewers.filter(function (v) { return v.email.toLowerCase() !== emailLower; });
   saveViewers_(remaining);
   return listAccess(token);
@@ -749,11 +822,6 @@ function removePicMapping(token, countryCode, email, outlet) {
   saveMappings_(mappings);
   return listAccess(token);
 }
-
-// Categories an outlet can be tagged with. Excludes 'all'/'SG'/'MY' - those are valid
-// Viewer scopes (see everything unfiltered, in one or both countries) but not
-// categories an outlet can be tagged with.
-var VALID_CATEGORIES = VALID_SCOPES.filter(function (s) { return s !== 'all' && s !== 'SG' && s !== 'MY'; });
 
 // Read by the separate Manage Outlet Categories panel - Super Admin only, unlike
 // listAccess which any Admin can call.
@@ -971,9 +1039,11 @@ function clientEngine_() {
       'alert("Couldn\\u2019t refresh: "+(err&&err.message?err.message:String(err)));' +
     '}' +
     'var LAST_ACCESS_DATA=null;' +
-    'var SCOPE_LABELS={all:"Super Viewer",SG:"SG Viewer",MY:"MY Viewer",fnb:"F&B only",salon:"Salon only",others:"Others only",group_management:"Group Management only"};' +
+    'var SCOPE_LABELS={all:"Super Viewer",SG:"SG Viewer",MY:"MY Viewer",fnb:"F&B only",salon:"Salon only",others:"Others only",group_management:"Group Management only",' +
+      'SG_fnb:"SG F&B only",SG_salon:"SG Salon only",SG_others:"SG Others only",SG_group_management:"SG Group Management only",' +
+      'MY_fnb:"MY F&B only",MY_salon:"MY Salon only",MY_others:"MY Others only",MY_group_management:"MY Group Management only"};' +
     'function viewerScopeOptionsFor(dataScope){' +
-      'var keys=dataScope==="super"?Object.keys(SCOPE_LABELS):[dataScope];' +
+      'var keys=dataScope==="super"?Object.keys(SCOPE_LABELS):[dataScope,dataScope+"_fnb",dataScope+"_salon",dataScope+"_others",dataScope+"_group_management"];' +
       'return keys.map(function(k){return "<option value=\\""+k+"\\">"+esc(SCOPE_LABELS[k])+"</option>";}).join("");' +
     '}' +
     'var ADMIN_ROLE_LABELS={super:"Super Admin",SG:"SG Admin",MY:"MY Admin"};' +
