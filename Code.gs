@@ -1086,7 +1086,9 @@ function updateFtOutlet(token, industryCode, taskId, newOutlet) {
   var industry = getFtIndustryByCode_(industryCode);
   if (!industry) throw new Error('Unknown industry.');
   newOutlet = String(newOutlet || '').trim();
-  if (getFtOutletOptions_(industryCode).indexOf(newOutlet) === -1) throw new Error('Choose a valid outlet.');
+  // Empty is a deliberate, valid choice - it clears the field back to TBC -
+  // so only a non-empty value has to match one of ClickUp's own options.
+  if (newOutlet && getFtOutletOptions_(industryCode).indexOf(newOutlet) === -1) throw new Error('Choose a valid outlet.');
   taskId = String(taskId || '').trim();
   if (!taskId) throw new Error('Unknown task.');
 
@@ -1096,7 +1098,13 @@ function updateFtOutlet(token, industryCode, taskId, newOutlet) {
 
   var synced = true;
   try {
-    FetcherLib.writeFtOutlet_(industry.listId, taskId, newOutlet);
+    // Note: no trailing underscore - Apps Script Libraries silently exclude
+    // trailing-underscore ("private") functions from what's callable across
+    // the Library boundary, throwing "is not a function" at call time. Every
+    // other helper in this file uses the underscore convention for
+    // same-project-only functions; this is the one exception, and it must
+    // stay that way for FetcherLib.writeFtOutlet to remain callable at all.
+    FetcherLib.writeFtOutlet(industry.listId, taskId, newOutlet);
   } catch (err) {
     synced = false;
     Logger.log('FT Outlet write failed for task ' + taskId + ': ' + (err && err.message ? err.message : err));
@@ -1657,13 +1665,16 @@ function clientEngine_() {
       'var pct=Math.round(done/total*100);' +
       'return "<span class=\\"fill\\"><i style=\\"width:"+pct+"%\\"></i></span>"+done+"/"+total;' +
     '}' +
+    'function ftShortName(v){var s=String(v||"");var at=s.indexOf("@");return at===-1?s:s.slice(0,at);}' +
     'function ftOutletCell(r,industry){' +
       'var badge="";' +
       'if(r.outletEditedBy){' +
+        'var shortLine="Last updated by "+ftShortName(r.outletEditedBy)+" \\u00B7 "+fmtDate(r.outletEditedAt);' +
+        'var fullLine="Last updated by "+r.outletEditedBy+" \\u00B7 "+fmtDate(r.outletEditedAt);' +
         'if(r.outletSynced){' +
-          'badge="<span class=\\"updated-badge\\">Last updated by "+esc(r.outletEditedBy)+" \\u00B7 "+esc(fmtDate(r.outletEditedAt))+"</span>";' +
+          'badge="<span class=\\"updated-badge\\" title=\\""+esc(fullLine)+"\\">"+esc(shortLine)+"</span>";' +
         '}else{' +
-          'badge="<span class=\\"sync-fail-badge\\">Last updated by "+esc(r.outletEditedBy)+" \\u00B7 "+esc(fmtDate(r.outletEditedAt))+" \\u00B7 Not synced</span>";' +
+          'badge="<span class=\\"sync-fail-badge\\" title=\\""+esc(fullLine+" \\u00B7 Not synced")+"\\">"+esc(shortLine)+" \\u00B7 Not synced</span>";' +
         '}' +
       '}' +
       'var tdOpen=(r.outletSynced===false)?"<td class=\\"sync-fail\\">":"<td>";' +
@@ -1707,7 +1718,7 @@ function clientEngine_() {
       'if(!row)return;' +
       'var td=spanEl.closest("td");' +
       'if(!td)return;' +
-      'var opts=industry.outlets.map(function(o){return "<option value=\\""+esc(o)+"\\""+(o===row.outlet?" selected":"")+">"+esc(o)+"</option>";}).join("");' +
+      'var opts="<option value=\\"\\""+(row.outlet?"":" selected")+">TBC</option>"+industry.outlets.map(function(o){return "<option value=\\""+esc(o)+"\\""+(o===row.outlet?" selected":"")+">"+esc(o)+"</option>";}).join("");' +
       'td.innerHTML="<select id=\\"ftOutletSelect_"+taskId+"\\">"+opts+"</select> <button class=\\"add-btn\\" onclick=\\"saveFtOutlet(\'"+taskId+"\')\\">Save</button> <button class=\\"remove-btn\\" onclick=\\"renderFt()\\">Cancel</button>";' +
     '}' +
     'function saveFtOutlet(taskId){' +
@@ -1879,9 +1890,9 @@ function HtmlOutput_(title, bodyHtml) {
       '.industry-btn.active{background:#7b68ee;color:#fff;border-color:#7b68ee;}' +
       '.tbc{color:#6b6f76;font-style:italic;}' +
       '.editable-outlet,.editable-tbc{border-bottom:1px dashed #7b68ee;color:#7b68ee;cursor:pointer;}' +
-      '.updated-badge{display:block;font-size:11px;color:#7b68ee;font-weight:normal;margin-top:1px;}' +
-      'td.sync-fail{background:#fdecea;border-left:3px solid #a12b1f;white-space:normal;}' +
-      '.sync-fail-badge{display:block;font-size:11px;color:#a12b1f;font-weight:600;margin-top:2px;}' +
+      '.updated-badge{display:block;font-size:11px;color:#7b68ee;font-weight:normal;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;}' +
+      'td.sync-fail{background:#fdecea;border-left:3px solid #a12b1f;}' +
+      '.sync-fail-badge{display:block;font-size:11px;color:#a12b1f;font-weight:600;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;}' +
       '.checklist{font-size:12px;color:#6b6f76;white-space:nowrap;}' +
       '.checklist .fill{display:inline-block;width:40px;height:5px;background:#eee;border-radius:3px;position:relative;margin-right:6px;vertical-align:middle;}' +
       '.checklist .fill i{position:absolute;inset:0;background:#7b68ee;border-radius:3px;display:block;}' +
