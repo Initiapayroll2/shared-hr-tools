@@ -385,6 +385,7 @@ function computeDashboardCountries_(email) {
     c.rows.forEach(function (r) {
       if (wanted[String(r.outlet || '').toLowerCase()]) {
         r.canAcknowledge = r.status === 'ONBOARDING COMPLETE' && !r.acknowledged;
+        r.canUnacknowledge = !!r.acknowledged;
       }
     });
   });
@@ -615,6 +616,26 @@ function applyPtAckLog_(rows) {
   return rows;
 }
 
+// Shared by acknowledgeOnboarding/unacknowledgeOnboarding below: resolves the
+// task and confirms the caller is a PIC actually mapped to its outlet - not
+// Admins/Viewers, who can already see everything directly, and not any other
+// PIC. Throws the same "Not authorized" error either endpoint should surface.
+function requireAckRow_(email, countryCode, taskId) {
+  var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
+  if (!country) throw new Error('Unknown country.');
+  taskId = String(taskId || '').trim();
+  if (!taskId) throw new Error('Unknown task.');
+
+  var row = getClickUpTasks_(country).filter(function (r) { return r.id === taskId; })[0];
+  if (!row) throw new Error('Task not found.');
+
+  var outlets = getOutletsForEmail_(email, countryCode).map(function (o) { return o.toLowerCase(); });
+  if (outlets.indexOf(String(row.outlet || '').toLowerCase()) === -1) {
+    throw new Error('Not authorized to acknowledge this task.');
+  }
+  return row;
+}
+
 // Lets a PIC acknowledge that a new hire's onboarding is complete on their end,
 // once ClickUp's status has reached "Onboarding Complete" - a portal-only
 // signal (see getPtAckLog_ above) for HR to then mark the ClickUp task Complete
@@ -623,22 +644,28 @@ function applyPtAckLog_(rows) {
 // already see everything directly.
 function acknowledgeOnboarding(token, countryCode, taskId) {
   var email = requireSession_(token);
-  var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
-  if (!country) throw new Error('Unknown country.');
-  taskId = String(taskId || '').trim();
-  if (!taskId) throw new Error('Unknown task.');
-
-  var row = getClickUpTasks_(country).filter(function (r) { return r.id === taskId; })[0];
-  if (!row) throw new Error('Task not found.');
+  var row = requireAckRow_(email, countryCode, taskId);
   if (row.status !== 'ONBOARDING COMPLETE') throw new Error('Only a completed onboarding can be acknowledged.');
-
-  var outlets = getOutletsForEmail_(email, countryCode).map(function (o) { return o.toLowerCase(); });
-  if (outlets.indexOf(String(row.outlet || '').toLowerCase()) === -1) {
-    throw new Error('Not authorized to acknowledge this task.');
-  }
 
   var log = getPtAckLog_();
   log[taskId] = { by: email, at: new Date().toISOString() };
+  savePtAckLog_(log);
+
+  return getDashboardData(token);
+}
+
+// Undoes an acknowledgment - e.g. a PIC clicked it by mistake, or a new hire's
+// onboarding actually isn't done after all. Same PIC-mapped-to-outlet
+// authorization as acknowledging itself; not restricted to the specific
+// person who acknowledged it, same as any other PIC for that outlet could
+// have acknowledged it in the first place.
+function unacknowledgeOnboarding(token, countryCode, taskId) {
+  var email = requireSession_(token);
+  var row = requireAckRow_(email, countryCode, taskId);
+  if (!row.acknowledged) throw new Error('This task has not been acknowledged.');
+
+  var log = getPtAckLog_();
+  delete log[taskId];
   savePtAckLog_(log);
 
   return getDashboardData(token);
@@ -1266,7 +1293,8 @@ function clientCountries_(countries) {
         dueDate: r.dueDate instanceof Date ? r.dueDate.toISOString() : null,
         lastUpdated: r.lastUpdated instanceof Date ? r.lastUpdated.toISOString() : null,
         acknowledged: r.acknowledged || null,
-        canAcknowledge: !!r.canAcknowledge
+        canAcknowledge: !!r.canAcknowledge,
+        canUnacknowledge: !!r.canUnacknowledge
       };
     });
     return { code: c.code, label: c.label, outletsLabel: c.outletsLabel, rows: clientRows, outlets: c.outlets };
@@ -1414,7 +1442,9 @@ function clientEngine_() {
     '}' +
     'function ptAckCell(r){' +
       'if(r.acknowledged){' +
-        'return "<td><span class=\\"ack-badge\\" title=\\"Acknowledged by "+esc(r.acknowledged.by)+" on "+esc(fmtDate(r.acknowledged.at))+"\\">\\u2713 Acknowledged</span></td>";' +
+        'var badge="<span class=\\"ack-badge\\" title=\\"Acknowledged by "+esc(r.acknowledged.by)+" on "+esc(fmtDate(r.acknowledged.at))+"\\">\\u2713 Acknowledged</span>";' +
+        'if(r.canUnacknowledge){badge+=" <button class=\\"remove-btn\\" onclick=\\"unacknowledgeRow(\'"+CURRENT+"\',\'"+r.id+"\')\\">Undo</button>";}' +
+        'return "<td>"+badge+"</td>";' +
       '}' +
       'if(r.canAcknowledge){' +
         'return "<td><button class=\\"add-btn\\" onclick=\\"acknowledgeRow(\'"+CURRENT+"\',\'"+r.id+"\')\\">Acknowledge</button></td>";' +
@@ -1423,6 +1453,9 @@ function clientEngine_() {
     '}' +
     'function acknowledgeRow(countryCode,taskId){' +
       'google.script.run.withSuccessHandler(applyRefresh).withFailureHandler(function(err){alert("Couldn\\u2019t acknowledge: "+(err&&err.message?err.message:String(err)));}).acknowledgeOnboarding(SESSION_TOKEN,countryCode,taskId);' +
+    '}' +
+    'function unacknowledgeRow(countryCode,taskId){' +
+      'google.script.run.withSuccessHandler(applyRefresh).withFailureHandler(function(err){alert("Couldn\\u2019t undo: "+(err&&err.message?err.message:String(err)));}).unacknowledgeOnboarding(SESSION_TOKEN,countryCode,taskId);' +
     '}' +
     'function buildGroupedTable(rows){' +
       'var groups={};var order=[];' +
