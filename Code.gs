@@ -357,6 +357,11 @@ function computeDashboardCountries_(email) {
       var wanted = {};
       outletOptions.forEach(function (o) { wanted[o.toLowerCase()] = true; });
       var rows = getClickUpTasks_(c).filter(function (t) { return wanted[t.outlet.toLowerCase()]; });
+      // Only a plain PIC (this branch) ever gets to acknowledge a completed
+      // onboarding - Admins/Viewers see the same acknowledged badge (attached
+      // by applyPtAckLog_ inside getClickUpTasks_ above) but never the button
+      // itself, since acknowledging is deliberately a PIC-only action.
+      rows.forEach(function (r) { r.canAcknowledge = r.status === 'ONBOARDING COMPLETE' && !r.acknowledged; });
       countries.push({ code: c.code, label: c.label, outletsLabel: outletOptions.join(', '), rows: rows, outlets: outletOptions });
     });
     if (countries.length === 0) {
@@ -561,8 +566,9 @@ function getClickUpTasks_(country) {
     throw new ClickUpError_('Onboarding data is still loading. Please try again in a few minutes.',
       'Cache empty for ' + country.code + ' - the Fetcher project may not have pushed yet.');
   }
-  return JSON.parse(raw).map(function (t) {
+  var rows = JSON.parse(raw).map(function (t) {
     return {
+      id: t.id,
       outlet: t.outlet,
       name: t.name,
       position: t.position,
@@ -571,6 +577,58 @@ function getClickUpTasks_(country) {
       lastUpdated: t.lastUpdated ? new Date(t.lastUpdated) : ''
     };
   });
+  return applyPtAckLog_(rows);
+}
+
+// Tracks a PIC's one-time acknowledgment that a new hire's onboarding is done
+// on their end, keyed by ClickUp task id - a signal for HR to then mark the
+// task Complete in ClickUp themselves; this project never writes that status
+// back. See acknowledgeOnboarding below for the only way an entry is created.
+function getPtAckLog_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('PT_ACK_LOG');
+  return raw ? JSON.parse(raw) : {};
+}
+
+function savePtAckLog_(log) {
+  PropertiesService.getScriptProperties().setProperty('PT_ACK_LOG', JSON.stringify(log));
+}
+
+function applyPtAckLog_(rows) {
+  var log = getPtAckLog_();
+  rows.forEach(function (r) {
+    var ack = log[r.id];
+    if (ack) r.acknowledged = ack;
+  });
+  return rows;
+}
+
+// Lets a PIC acknowledge that a new hire's onboarding is complete on their end,
+// once ClickUp's status has reached "Onboarding Complete" - a portal-only
+// signal (see getPtAckLog_ above) for HR to then mark the ClickUp task Complete
+// themselves; this never writes anything back to ClickUp. Restricted to a PIC
+// actually mapped to the task's own outlet - not Admins/Viewers, who can
+// already see everything directly.
+function acknowledgeOnboarding(token, countryCode, taskId) {
+  var email = requireSession_(token);
+  var country = COUNTRIES.filter(function (c) { return c.code === countryCode; })[0];
+  if (!country) throw new Error('Unknown country.');
+  taskId = String(taskId || '').trim();
+  if (!taskId) throw new Error('Unknown task.');
+
+  var row = getClickUpTasks_(country).filter(function (r) { return r.id === taskId; })[0];
+  if (!row) throw new Error('Task not found.');
+  if (row.status !== 'ONBOARDING COMPLETE') throw new Error('Only a completed onboarding can be acknowledged.');
+
+  var outlets = getOutletsForEmail_(email, countryCode).map(function (o) { return o.toLowerCase(); });
+  if (outlets.indexOf(String(row.outlet || '').toLowerCase()) === -1) {
+    throw new Error('Not authorized to acknowledge this task.');
+  }
+
+  var log = getPtAckLog_();
+  log[taskId] = { by: email, at: new Date().toISOString() };
+  savePtAckLog_(log);
+
+  return getDashboardData(token);
 }
 
 // Each country's Outlet dropdown options come from its own ClickUp field definition
@@ -1187,12 +1245,15 @@ function clientCountries_(countries) {
   return countries.map(function (c) {
     var clientRows = c.rows.map(function (r) {
       return {
+        id: r.id,
         outlet: r.outlet,
         name: r.name,
         position: r.position,
         status: r.status,
         dueDate: r.dueDate instanceof Date ? r.dueDate.toISOString() : null,
-        lastUpdated: r.lastUpdated instanceof Date ? r.lastUpdated.toISOString() : null
+        lastUpdated: r.lastUpdated instanceof Date ? r.lastUpdated.toISOString() : null,
+        acknowledged: r.acknowledged || null,
+        canAcknowledge: !!r.canAcknowledge
       };
     });
     return { code: c.code, label: c.label, outletsLabel: c.outletsLabel, rows: clientRows, outlets: c.outlets };
@@ -1338,6 +1399,18 @@ function clientEngine_() {
       'var legend=statuses.map(function(s){var n=counts[s]||0;if(n===0)return "";var color=STATUS_COLORS[s]||DEFAULT_COLOR;return "<div class=\\"legend-item\\"><span class=\\"legend-dot\\" style=\\"background:"+color+"\\"></span>"+esc(s)+" <span class=\\"legend-count\\">"+n+"</span></div>";}).join("");' +
       'return "<div class=\\"section\\"><div class=\\"section-title\\">By status</div><div class=\\"bar\\">"+segments+"</div><div class=\\"legend\\">"+legend+"</div></div>";' +
     '}' +
+    'function ptAckCell(r){' +
+      'if(r.acknowledged){' +
+        'return "<td><span class=\\"ack-badge\\" title=\\"Acknowledged by "+esc(r.acknowledged.by)+" on "+esc(fmtDate(r.acknowledged.at))+"\\">\\u2713 Acknowledged</span></td>";' +
+      '}' +
+      'if(r.canAcknowledge){' +
+        'return "<td><button class=\\"add-btn\\" onclick=\\"acknowledgeRow(\'"+CURRENT+"\',\'"+r.id+"\')\\">Acknowledge</button></td>";' +
+      '}' +
+      'return "<td class=\\"muted\\">\\u2014</td>";' +
+    '}' +
+    'function acknowledgeRow(countryCode,taskId){' +
+      'google.script.run.withSuccessHandler(applyRefresh).withFailureHandler(function(err){alert("Couldn\\u2019t acknowledge: "+(err&&err.message?err.message:String(err)));}).acknowledgeOnboarding(SESSION_TOKEN,countryCode,taskId);' +
+    '}' +
     'function buildGroupedTable(rows){' +
       'var groups={};var order=[];' +
       'rows.forEach(function(r){if(!groups[r.status]){groups[r.status]=[];order.push(r.status);}groups[r.status].push(r);});' +
@@ -1346,12 +1419,12 @@ function clientEngine_() {
       'statusOrder.forEach(function(status){' +
         'var members=groups[status];if(!members||members.length===0)return;' +
         'var color=STATUS_COLORS[status]||DEFAULT_COLOR;' +
-        'body+="<tr class=\\"group-header\\"><td colspan=\\"5\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
+        'body+="<tr class=\\"group-header\\"><td colspan=\\"6\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
         'members.forEach(function(r){' +
-          'body+="<tr><td>"+esc(r.outlet)+"</td><td>"+esc(toTitleCase(r.name))+"</td><td>"+esc(r.position)+"</td><td>"+esc(fmtDate(r.dueDate))+"</td><td class=\\"muted\\">"+esc(fmtDate(r.lastUpdated))+"</td></tr>";' +
+          'body+="<tr><td>"+esc(r.outlet)+"</td><td>"+esc(toTitleCase(r.name))+"</td><td>"+esc(r.position)+"</td><td>"+esc(fmtDate(r.dueDate))+"</td><td class=\\"muted\\">"+esc(fmtDate(r.lastUpdated))+"</td>"+ptAckCell(r)+"</tr>";' +
         '});' +
       '});' +
-      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Outlet</th><th>Employee</th><th>Position</th><th>Expected Join Date</th><th>Last Updated</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
+      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Outlet</th><th>Employee</th><th>Position</th><th>Expected Join Date</th><th>Last Updated</th><th>Onboarding</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
     '}' +
     'function emptyState(selected){' +
       'var who=selected?("<b>"+esc(selected)+"</b>"):"any outlet";' +
@@ -1929,6 +2002,7 @@ function HtmlOutput_(title, bodyHtml) {
       '.checklist{font-size:12px;color:#6b6f76;white-space:nowrap;}' +
       '.checklist .fill{display:inline-block;width:40px;height:5px;background:#eee;border-radius:3px;position:relative;margin-right:6px;vertical-align:middle;}' +
       '.checklist .fill i{position:absolute;inset:0;background:#7b68ee;border-radius:3px;display:block;}' +
+      '.ack-badge{color:#1f9254;font-weight:600;font-size:12px;white-space:nowrap;}' +
     '</style></head><body>' + bodyHtml + '</body></html>';
   return HtmlService.createHtmlOutput(html)
     .setTitle(title)
