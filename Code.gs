@@ -199,13 +199,18 @@ function doGet(e) {
   // "?token=..." URL isn't possible here); render the dashboard directly in
   // that tab rather than trying to bounce anywhere else.
   if (params.code) {
+    // Only the code exchange itself is treated as a sign-in failure - if that
+    // succeeds but rendering the dashboard afterward throws, that's a real bug
+    // in the render path, not a bad sign-in, and should surface as such
+    // instead of looping the visitor back to "Sign-in failed" forever.
+    var newEmail;
     try {
-      var newEmail = exchangeCodeForEmail_(params.code, execUrl);
-      return renderDashboardOrError_(newEmail, signSession_(newEmail));
+      newEmail = exchangeCodeForEmail_(params.code, execUrl);
     } catch (err) {
       Logger.log('OAuth callback failed: ' + (err && err.message ? err.message : err));
       return signInPage_(execUrl, 'Sign-in failed. Please try again.');
     }
+    return renderDashboardOrError_(newEmail, signSession_(newEmail));
   }
   if (params.error) {
     return signInPage_(execUrl, 'Sign-in was cancelled. Please try again.');
@@ -984,7 +989,15 @@ function getFtOutletOptions_(industryCode) {
 // grow without bound.
 function getFtEditLog_() {
   var raw = PropertiesService.getScriptProperties().getProperty('FT_EDIT_LOG');
-  return raw ? JSON.parse(raw) : {};
+  var log = raw ? JSON.parse(raw) : {};
+  // Pre-2026-09-18 data stored a single {outlet, previousOutlet, by, at, synced}
+  // object per task instead of a history array - normalize on read so old
+  // entries don't crash applyFtEditLog_ (which now always expects an array),
+  // same pattern as getAdmins_'s normalization of old plain-string entries.
+  Object.keys(log).forEach(function (id) {
+    if (!Array.isArray(log[id])) log[id] = [log[id]];
+  });
+  return log;
 }
 
 function saveFtEditLog_(log) {
