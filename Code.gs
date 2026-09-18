@@ -163,6 +163,26 @@ function viewerScopeCategoryLabel_(scope) {
 var ADMIN_SCOPES = ['super', 'SG', 'MY'];
 var ADMIN_ROLE_LABELS = { super: 'Super Admin', SG: 'SG Admin', MY: 'MY Admin' };
 
+// ---- FT (Full-Timer) Onboarding: a second, independent dashboard ----
+// Grouped by industry - each one its own ClickUp List inside the "FT Onboarding"
+// folder - never by outlet. MT Onboarding stays untouched/out of scope for now;
+// only SG's three industries are wired up. Access is its own roster
+// (FT_ADMINS/FT_EDITORS below), completely separate from PT's own
+// ADMINS/VIEWERS/PIC_MAPPINGS - see getFtAccess_ for exactly how a PT Super
+// Admin automatically gets full FT access too, with nobody else crossing over
+// unless explicitly added to one of these two FT lists.
+var FT_INDUSTRIES = [
+  { code: 'SG_fnb', label: 'SG · F&B', listId: '901817849940' },
+  { code: 'SG_beauty', label: 'SG · Beauty', listId: '901817849939' },
+  { code: 'SG_officehq', label: 'SG · Office HQ', listId: '901817849941' }
+];
+var FT_ROLE_LABELS = { ftAdmin: 'FT Admin', ftEditor: 'FT Editor' };
+
+function ftIndustryLabel_(code) {
+  var match = FT_INDUSTRIES.filter(function (i) { return i.code === code; })[0];
+  return match ? match.label : code;
+}
+
 // Each country has its own outlet namespace - an outlet named e.g. "Modu K" in
 // Singapore is a completely different outlet from one with the same name in
 // Malaysia. So a PIC's access is always resolved within a single country's own
@@ -350,11 +370,15 @@ function computeDashboardCountries_(email) {
 }
 
 function doGetInner_(email, token) {
-  var result = computeDashboardCountries_(email);
-  if (!result.countries) {
-    return HtmlOutput_('No access configured', result.noAccessHtml);
+  var ptResult = computeDashboardCountries_(email);
+  var ftAccess = getFtAccess_(email);
+  var hasPt = !!ptResult.countries;
+  var hasFt = ftAccess.level !== null;
+  if (!hasPt && !hasFt) {
+    return HtmlOutput_('No access configured', ptResult.noAccessHtml);
   }
-  return HtmlOutput_('Onboarding Status', renderShell_(result.countries, email, result.isAdmin, result.roleLabel, getLastSynced_(), token));
+  var ftData = hasFt ? getFtDashboardData(token) : null;
+  return HtmlOutput_('Onboarding Status', renderShell_(hasPt ? ptResult : null, ftAccess, ftData, email, token));
 }
 
 // ---- Sign-in: OAuth 2.0 "Sign in with Google" + a self-contained signed session token ----
@@ -512,6 +536,14 @@ function pushData(secret, data) {
       cache.put('clickup_outlets_' + c.code, JSON.stringify(data.outlets[c.code]), 21600);
     }
   });
+  FT_INDUSTRIES.forEach(function (i) {
+    if (data && data.ft && data.ft.tasks && data.ft.tasks[i.code]) {
+      cache.put('ft_tasks_' + i.code, JSON.stringify(data.ft.tasks[i.code]), 21600);
+    }
+    if (data && data.ft && data.ft.outlets && data.ft.outlets[i.code]) {
+      cache.put('ft_outlets_' + i.code, JSON.stringify(data.ft.outlets[i.code]), 21600);
+    }
+  });
   cache.put('clickup_last_synced', new Date().toISOString(), 21600);
   return 'OK';
 }
@@ -622,6 +654,65 @@ function getOutletCategoryFor_(categories, countryCode, outlet) {
     return c.country === countryCode && String(c.outlet || '').trim().toLowerCase() === outletLower;
   })[0];
   return match ? match.category : null;
+}
+
+// FT_ADMINS is a JSON array of email strings - full read access to every FT
+// industry, but (unlike PT Admins) no management capability of their own; only
+// Super Admin can add/remove FT_ADMINS or FT_EDITORS entries (see
+// requireSuperAdmin_ usages below). FT_EDITORS is a JSON array of
+// {email, industry} objects, industry being one of FT_INDUSTRIES' codes - an FT
+// Editor can edit the Outlet field for tasks in that one industry only.
+function getFtAdmins_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('FT_ADMINS');
+  return raw ? JSON.parse(raw) : [];
+}
+
+function saveFtAdmins_(admins) {
+  PropertiesService.getScriptProperties().setProperty('FT_ADMINS', JSON.stringify(admins));
+}
+
+function getFtEditors_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('FT_EDITORS');
+  return raw ? JSON.parse(raw) : [];
+}
+
+function saveFtEditors_(editors) {
+  PropertiesService.getScriptProperties().setProperty('FT_EDITORS', JSON.stringify(editors));
+}
+
+// Returns {level, industry} - level one of 'super' (every industry, can edit
+// Outlet everywhere, and the only level that can manage FT_ADMINS/FT_EDITORS),
+// 'ftAdmin' (every industry, read-only), 'ftEditor' (one industry, view + edit
+// that industry's Outlet only), or null (no FT access at all - the FT tab
+// doesn't exist for them). A PT Super Admin always resolves to 'super' here
+// automatically - being Super Admin is by itself enough, no separate FT_ADMINS
+// entry needed, since Super Admin is the one shared highest authority across
+// both dashboards.
+function getFtAccess_(email) {
+  if (isSuperAdmin_(email)) return { level: 'super', industry: null };
+  var target = String(email || '').trim().toLowerCase();
+  var isFtAdmin = getFtAdmins_().some(function (a) { return String(a || '').trim().toLowerCase() === target; });
+  if (isFtAdmin) return { level: 'ftAdmin', industry: null };
+  var editorEntry = getFtEditors_().filter(function (e) { return String(e.email || '').trim().toLowerCase() === target; })[0];
+  if (editorEntry) return { level: 'ftEditor', industry: editorEntry.industry };
+  return { level: null, industry: null };
+}
+
+function ftIndustriesVisibleTo_(access) {
+  if (access.level === 'super' || access.level === 'ftAdmin') return FT_INDUSTRIES;
+  if (access.level === 'ftEditor') return FT_INDUSTRIES.filter(function (i) { return i.code === access.industry; });
+  return [];
+}
+
+function ftCanEditOutlet_(access, industryCode) {
+  return access.level === 'super' || (access.level === 'ftEditor' && access.industry === industryCode);
+}
+
+function requireFtAccess_(token) {
+  var email = requireSession_(token);
+  var access = getFtAccess_(email);
+  if (!access.level) throw new Error('Not authorized for FT Onboarding.');
+  return { email: email, access: access };
 }
 
 function isAdmin_(email) {
@@ -863,6 +954,212 @@ function removeOutletCategory(token, countryCode, outlet) {
   return listOutletCategories(token);
 }
 
+// ---- FT dashboard: reads (from the cache Fetcher's pushData keeps warm, same as
+// PT's getClickUpTasks_) + the Outlet write-back path ----
+
+function getFtIndustryByCode_(code) {
+  return FT_INDUSTRIES.filter(function (i) { return i.code === code; })[0] || null;
+}
+
+function getFtTasksRaw_(industryCode) {
+  var raw = CacheService.getScriptCache().get('ft_tasks_' + industryCode);
+  return raw ? JSON.parse(raw) : [];
+}
+
+function getFtOutletOptions_(industryCode) {
+  var raw = CacheService.getScriptCache().get('ft_outlets_' + industryCode);
+  return raw ? JSON.parse(raw) : [];
+}
+
+// Tracks manual portal edits to a task's Outlet field, keyed by ClickUp task id,
+// so the dashboard can show a "Last updated by X - date" badge (and a
+// persistent "Not synced" flag if the write to ClickUp failed) - see
+// updateFtOutlet/applyFtEditLog_. previousOutlet is the live value at the
+// moment of the edit attempt, which is what lets applyFtEditLog_ tell "still
+// unresolved" apart from "someone since fixed it directly in ClickUp" without
+// any extra bookkeeping. Small enough (one entry per task ever manually
+// edited, self-pruning) to live in Properties like the rest of this file's
+// access-control state.
+function getFtEditLog_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('FT_EDIT_LOG');
+  return raw ? JSON.parse(raw) : {};
+}
+
+function saveFtEditLog_(log) {
+  PropertiesService.getScriptProperties().setProperty('FT_EDIT_LOG', JSON.stringify(log));
+}
+
+// Merges the edit log onto a set of rows fresh from ClickUp (via cache). Three
+// cases per logged task: (1) ClickUp's live Outlet now matches what we tried to
+// set - show the "Last updated by" badge, synced; (2) it still matches what it
+// was *before* our edit - our write never landed, show the attempted value with
+// a persistent "Not synced" flag; (3) it matches neither - someone changed it
+// directly in ClickUp since, so the log entry is stale and gets dropped.
+function applyFtEditLog_(rows) {
+  var log = getFtEditLog_();
+  var changed = false;
+  rows.forEach(function (r) {
+    var entry = log[r.id];
+    if (!entry) return;
+    if (r.outlet === entry.outlet) {
+      // ClickUp's live value now matches what we tried to set - whether that's
+      // because our own write succeeded, or the Fetcher just hasn't caught up
+      // to a *failed* write's eventual manual fix that happened to land on the
+      // same value, either way this is resolved: show the badge as synced.
+      r.outletEditedBy = entry.by;
+      r.outletEditedAt = entry.at;
+      r.outletSynced = true;
+      if (!entry.synced) { entry.synced = true; changed = true; }
+    } else if (r.outlet === entry.previousOutlet) {
+      // Live value hasn't moved since our edit attempt - the Fetcher's next
+      // poll (up to a minute away) just hasn't caught up yet. Trust what the
+      // write attempt itself reported rather than re-deriving it from a cache
+      // that's known to still be stale.
+      r.outlet = entry.outlet;
+      r.outletEditedBy = entry.by;
+      r.outletEditedAt = entry.at;
+      r.outletSynced = entry.synced;
+    } else {
+      // Live value is neither what we tried to set nor what it was before -
+      // someone changed it directly in ClickUp since. Our record is stale.
+      delete log[r.id];
+      changed = true;
+    }
+  });
+  if (changed) saveFtEditLog_(log);
+  return rows;
+}
+
+function buildFtRows_(industryCode) {
+  var raw = getFtTasksRaw_(industryCode);
+  var rows = raw.map(function (t) {
+    return {
+      id: t.id,
+      fullName: t.fullName || '',
+      position: t.position || '',
+      outlet: t.outlet || '',
+      department: t.department || '',
+      status: t.status || '',
+      dueDate: t.dueDate || '',
+      assignee: t.assignee || '',
+      checklistDone: t.checklistDone || 0,
+      checklistTotal: t.checklistTotal || 0
+    };
+  });
+  return applyFtEditLog_(rows);
+}
+
+// Mirrors computeDashboardCountries_'s role for PT: every visible industry's
+// rows/outlets are returned together (there are at most three, all small), so
+// the client can switch industries instantly like it already does for PT's
+// country toggle, with no extra round trip. Called both for the initial page
+// render and the in-page Refresh button.
+function getFtDashboardData(token) {
+  var auth = requireFtAccess_(token);
+  var visible = ftIndustriesVisibleTo_(auth.access);
+  if (visible.length === 0) throw new Error('No FT industries are set up for you.');
+  return {
+    industries: visible.map(function (i) {
+      return {
+        code: i.code,
+        label: i.label,
+        rows: buildFtRows_(i.code),
+        outlets: getFtOutletOptions_(i.code),
+        canEdit: ftCanEditOutlet_(auth.access, i.code)
+      };
+    }),
+    lastSynced: getLastSynced_()
+  };
+}
+
+// Writes a new Outlet value back to ClickUp for one FT task. The actual
+// UrlFetchApp call happens in the separate ClickUp Fetcher project (via the
+// Library mechanism, same direction-reversed trick pushData's own header
+// comment describes) - this project deliberately never holds a ClickUp token
+// itself, exactly like the rest of the file. Whether or not the write
+// succeeds, the attempt is recorded in FT_EDIT_LOG so the dashboard can show
+// the right badge (see applyFtEditLog_) - a failed write still keeps the
+// attempted value visible, just flagged, rather than silently reverting.
+function updateFtOutlet(token, industryCode, taskId, newOutlet) {
+  var auth = requireFtAccess_(token);
+  if (!ftCanEditOutlet_(auth.access, industryCode)) throw new Error('Not authorized to edit this field.');
+  var industry = getFtIndustryByCode_(industryCode);
+  if (!industry) throw new Error('Unknown industry.');
+  newOutlet = String(newOutlet || '').trim();
+  if (getFtOutletOptions_(industryCode).indexOf(newOutlet) === -1) throw new Error('Choose a valid outlet.');
+  taskId = String(taskId || '').trim();
+  if (!taskId) throw new Error('Unknown task.');
+
+  var rows = getFtTasksRaw_(industryCode);
+  var row = rows.filter(function (r) { return r.id === taskId; })[0];
+  var previousOutlet = row ? (row.outlet || '') : '';
+
+  var synced = true;
+  try {
+    FetcherLib.writeFtOutlet_(industry.listId, taskId, newOutlet);
+  } catch (err) {
+    synced = false;
+    Logger.log('FT Outlet write failed for task ' + taskId + ': ' + (err && err.message ? err.message : err));
+  }
+
+  var log = getFtEditLog_();
+  log[taskId] = { outlet: newOutlet, previousOutlet: previousOutlet, by: auth.email, at: new Date().toISOString(), synced: synced };
+  saveFtEditLog_(log);
+
+  return getFtDashboardData(token);
+}
+
+// ---- FT access management (Super Admin only) ----
+
+function listFtAccess(token) {
+  requireSuperAdmin_(token);
+  return {
+    admins: getFtAdmins_(),
+    editors: getFtEditors_(),
+    industries: FT_INDUSTRIES.map(function (i) { return { code: i.code, label: i.label }; })
+  };
+}
+
+function addFtAdmin(token, email) {
+  requireSuperAdmin_(token);
+  email = String(email || '').trim();
+  if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
+  var admins = getFtAdmins_();
+  var target = email.toLowerCase();
+  if (admins.some(function (a) { return String(a).toLowerCase() === target; })) {
+    throw new Error(email + ' is already an FT Admin.');
+  }
+  admins.push(email);
+  saveFtAdmins_(admins);
+  return listFtAccess(token);
+}
+
+function removeFtAdmin(token, email) {
+  requireSuperAdmin_(token);
+  var target = String(email || '').trim().toLowerCase();
+  saveFtAdmins_(getFtAdmins_().filter(function (a) { return String(a).toLowerCase() !== target; }));
+  return listFtAccess(token);
+}
+
+function addFtEditor(token, email, industryCode) {
+  requireSuperAdmin_(token);
+  email = String(email || '').trim();
+  if (!isValidEmail_(email)) throw new Error('Enter a valid email address.');
+  if (!getFtIndustryByCode_(industryCode)) throw new Error('Unknown industry.');
+  var emailLower = email.toLowerCase();
+  var editors = getFtEditors_().filter(function (e) { return String(e.email || '').toLowerCase() !== emailLower; });
+  editors.push({ email: email, industry: industryCode });
+  saveFtEditors_(editors);
+  return listFtAccess(token);
+}
+
+function removeFtEditor(token, email) {
+  requireSuperAdmin_(token);
+  var target = String(email || '').trim().toLowerCase();
+  saveFtEditors_(getFtEditors_().filter(function (e) { return String(e.email || '').toLowerCase() !== target; }));
+  return listFtAccess(token);
+}
+
 // ---- Page shell: header + country toggle + filter select + empty client-rendered dashboard ----
 
 // Converts server-side country/row objects (which may hold real Date objects)
@@ -900,34 +1197,61 @@ function getDashboardData(token) {
   };
 }
 
-function renderShell_(countries, email, isAdmin, roleLabel, lastSynced, token) {
-  var clientCountries = clientCountries_(countries);
-  var countriesJson = JSON.stringify(clientCountries).replace(/</g, '\\u003c');
+function renderShell_(ptResult, ftAccess, ftData, email, token) {
+  var hasPt = !!ptResult;
+  var hasFt = !!ftData;
+  var isPtAdmin = hasPt && ptResult.isAdmin;
+  var isSuper = isSuperAdmin_(email);
+  var roleLabel = hasPt ? ptResult.roleLabel
+    : (ftAccess.level === 'ftEditor' ? 'FT Editor \u00B7 ' + ftIndustryLabel_(ftAccess.industry) : (FT_ROLE_LABELS[ftAccess.level] || ''));
+
+  var countriesJson = JSON.stringify(hasPt ? clientCountries_(ptResult.countries) : []).replace(/</g, '\\u003c');
+  var ftDataJson = JSON.stringify(ftData || null).replace(/</g, '\\u003c');
+  var defaultApp = hasPt ? 'pt' : 'ft';
+
+  var appTabsHtml = (hasPt && hasFt) ?
+    '<div class="app-tabs" id="appTabs">' +
+      '<button class="app-tab" id="tabPt" onclick="switchApp(\'pt\')">PT Onboarding</button>' +
+      '<button class="app-tab" id="tabFt" onclick="switchApp(\'ft\')">FT Onboarding</button>' +
+    '</div>' : '';
 
   return '' +
     '<div class="header">' +
       '<div>' +
         '<h1>Onboarding Status</h1>' +
-        '<div class="muted" id="headerLabel">' + escapeHtml_(countries[0].outletsLabel) + '</div>' +
+        appTabsHtml +
+        '<div class="muted" id="headerLabel"></div>' +
         '<div class="muted" id="syncLabel" style="font-size:12px;"></div>' +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:12px;">' +
         '<button class="manage-btn" id="refreshBtn" onclick="doRefresh()">Refresh</button>' +
-        (isAdmin ? '<button class="manage-btn" onclick="openAccessPanel()">Manage Access</button>' : '') +
+        (isPtAdmin ? '<button class="manage-btn" onclick="openAccessPanel()">Manage Access</button>' : '') +
+        (isSuper ? '<button class="manage-btn" onclick="openFtAccessPanel()">Manage FT Access</button>' : '') +
         '<div class="muted">' + escapeHtml_(email) + (roleLabel ? ' \u00B7 ' + escapeHtml_(roleLabel) : '') + '</div>' +
       '</div>' +
     '</div>' +
-    '<div id="filter-bar"></div>' +
-    '<div id="dashboard-body"></div>' +
+    '<div id="ptApp" style="display:none;">' +
+      '<div id="filter-bar"></div>' +
+      '<div id="dashboard-body"></div>' +
+    '</div>' +
+    '<div id="ftApp" style="display:none;">' +
+      '<div id="ft-filter-bar"></div>' +
+      '<div id="ft-dashboard-body"></div>' +
+    '</div>' +
     '<div id="accessModal" class="modal-overlay" style="display:none;"><div class="modal" id="accessModalContent"></div></div>' +
     '<div id="categoriesModal" class="modal-overlay" style="display:none;"><div class="modal" id="categoriesModalContent"></div></div>' +
+    '<div id="ftAccessModal" class="modal-overlay" style="display:none;"><div class="modal" id="ftAccessModalContent"></div></div>' +
     '<script>' + clientEngine_() +
       '\nvar SESSION_TOKEN=' + JSON.stringify(token || '') + ';' +
+      '\nvar HAS_PT=' + (hasPt ? 'true' : 'false') + ';' +
+      '\nvar HAS_FT=' + (hasFt ? 'true' : 'false') + ';' +
       '\nvar COUNTRIES=' + countriesJson + ';' +
-      '\nvar CURRENT=COUNTRIES[0].code;' +
-      '\nvar LAST_SYNCED=' + JSON.stringify(lastSynced || null) + ';' +
-      '\ndocument.getElementById("syncLabel").textContent="Refreshes automatically every minute"+(LAST_SYNCED?(" \u00B7 Last updated "+fmtTime(LAST_SYNCED)):"");' +
-      '\ninitFilterBar();\nrender("");\n<\/script>';
+      '\nvar CURRENT=COUNTRIES.length?COUNTRIES[0].code:null;' +
+      '\nvar FT_DATA=' + ftDataJson + ';' +
+      '\nvar FT_CURRENT=FT_DATA&&FT_DATA.industries.length?FT_DATA.industries[0].code:null;' +
+      '\nvar LAST_SYNCED=' + JSON.stringify(getLastSynced_()) + ';' +
+      '\ninitApp(' + JSON.stringify(defaultApp) + ');' +
+      '\n<\/script>';
 }
 
 // All dashboard HTML (stat cards, by-outlet, by-status, grouped table) is built
@@ -937,6 +1261,34 @@ function clientEngine_() {
     'var STATUS_ORDER=["PENDING HR REVIEW","TO GENERATE LOA","LOA PENDING SIGNATURE","TO CREATE STAFFANY ACCOUNT","ONBOARDING COMPLETE","COMPLETE","TO DO","APPROVED FOR LOA"];' +
     'var STATUS_COLORS={"PENDING HR REVIEW":"#8b8f97","TO GENERATE LOA":"#7b68ee","LOA PENDING SIGNATURE":"#4a90d9","TO CREATE STAFFANY ACCOUNT":"#2bb673","ONBOARDING COMPLETE":"#1f9254","COMPLETE":"#1c1c1c","TO DO":"#8b8f97","APPROVED FOR LOA":"#e8a33d"};' +
     'var DEFAULT_COLOR="#8b8f97";' +
+    'var APP="pt";' +
+    'function initApp(defaultApp){' +
+      'if(HAS_PT){initFilterBar();render("");}' +
+      'if(HAS_FT){renderFtIndustryToggle();renderFt();}' +
+      'switchApp(defaultApp);' +
+    '}' +
+    'function switchApp(app){' +
+      'APP=app;' +
+      'var ptEl=document.getElementById("ptApp");' +
+      'var ftEl=document.getElementById("ftApp");' +
+      'if(ptEl)ptEl.style.display=(app==="pt")?"block":"none";' +
+      'if(ftEl)ftEl.style.display=(app==="ft")?"block":"none";' +
+      'var tabPt=document.getElementById("tabPt");' +
+      'var tabFt=document.getElementById("tabFt");' +
+      'if(tabPt)tabPt.className="app-tab"+(app==="pt"?" active":"");' +
+      'if(tabFt)tabFt.className="app-tab"+(app==="ft"?" active":"");' +
+      'updateHeaderLabel();' +
+    '}' +
+    'function updateHeaderLabel(){' +
+      'var lbl=document.getElementById("headerLabel");' +
+      'if(lbl){' +
+        'if(APP==="pt"&&HAS_PT){lbl.textContent=findCountry(CURRENT).outletsLabel;}' +
+        'else if(APP==="ft"&&HAS_FT){lbl.textContent="Full-timer onboarding \\u00B7 "+ftIndustryLabelFor(FT_CURRENT);}' +
+        'else{lbl.textContent="";}' +
+      '}' +
+      'var syncEl=document.getElementById("syncLabel");' +
+      'if(syncEl)syncEl.textContent="Refreshes automatically every minute"+(LAST_SYNCED?(" \\u00B7 Last updated "+fmtTime(LAST_SYNCED)):"");' +
+    '}' +
     'function esc(v){return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}' +
     'function fmtDate(iso){if(!iso)return "";var d=new Date(iso);return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});}' +
     'function fmtTime(iso){if(!iso)return "";var d=new Date(iso);return d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});}' +
@@ -1017,7 +1369,23 @@ function clientEngine_() {
     'function doRefresh(){' +
       'var btn=document.getElementById("refreshBtn");' +
       'if(btn){btn.disabled=true;btn.textContent="Refreshing\\u2026";}' +
-      'google.script.run.withSuccessHandler(applyRefresh).withFailureHandler(refreshError).getDashboardData(SESSION_TOKEN);' +
+      'if(APP==="ft"&&HAS_FT){' +
+        'google.script.run.withSuccessHandler(applyFtRefresh).withFailureHandler(refreshError).getFtDashboardData(SESSION_TOKEN);' +
+      '}else{' +
+        'google.script.run.withSuccessHandler(applyRefresh).withFailureHandler(refreshError).getDashboardData(SESSION_TOKEN);' +
+      '}' +
+    '}' +
+    'function applyFtRefresh(data){' +
+      'FT_DATA=data;' +
+      'LAST_SYNCED=data.lastSynced;' +
+      'var stillExists=false;' +
+      'for(var i=0;i<FT_DATA.industries.length;i++){if(FT_DATA.industries[i].code===FT_CURRENT)stillExists=true;}' +
+      'if(!stillExists)FT_CURRENT=FT_DATA.industries.length?FT_DATA.industries[0].code:null;' +
+      'renderFtIndustryToggle();' +
+      'renderFt();' +
+      'updateHeaderLabel();' +
+      'var btn=document.getElementById("refreshBtn");' +
+      'if(btn){btn.disabled=false;btn.textContent="Refresh";}' +
     '}' +
     'function applyRefresh(data){' +
       'COUNTRIES=data.countries;' +
@@ -1253,6 +1621,183 @@ function clientEngine_() {
       'var optimistic=prevData.categories.filter(function(c,i){return i!==idx;});' +
       'renderCategoriesPanel({countries:prevData.countries,categories:optimistic});' +
       'google.script.run.withSuccessHandler(renderCategoriesPanel).withFailureHandler(function(err){renderCategoriesPanel(prevData);var e=document.getElementById("topCategoryError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeOutletCategory(SESSION_TOKEN,cat.country,cat.outlet);' +
+    '}' +
+    'var FT_STATUS_ORDER=["PENDING HR REVIEW","PENDING APPLICATION FORM","PENDING P-FILE CREATION","TO GENERATE LOA","PENDING LOA BRIEFING","LOA PENDING SIGNATURE","PENDING VISA APPLICATION","PENDING VISA APPROVAL","PENDING VISA ISSUANCE","PENDING CARD REGISTRATION","PENDING STAFFANY ACCOUNT","PENDING CALENDAR INVITE","PENDING BANK CARD","PENDING CARD DELIVERY","ONBOARDING COMPLETE"];' +
+    'var FT_STATUS_COLORS={"PENDING HR REVIEW":"#8b8f97","PENDING APPLICATION FORM":"#e8a33d","PENDING P-FILE CREATION":"#7b68ee","TO GENERATE LOA":"#5b8dd6","PENDING LOA BRIEFING":"#3fa7a3","LOA PENDING SIGNATURE":"#4a90d9","PENDING VISA APPLICATION":"#d9622b","PENDING VISA APPROVAL":"#c0392b","PENDING VISA ISSUANCE":"#9b59b6","PENDING CARD REGISTRATION":"#d63384","PENDING STAFFANY ACCOUNT":"#16a085","PENDING CALENDAR INVITE":"#4a90d9","PENDING BANK CARD":"#c9a227","PENDING CARD DELIVERY":"#2bb673","ONBOARDING COMPLETE":"#1f9254"};' +
+    'function findFtIndustry(code){if(!FT_DATA)return null;for(var i=0;i<FT_DATA.industries.length;i++){if(FT_DATA.industries[i].code===code)return FT_DATA.industries[i];}return FT_DATA.industries[0];}' +
+    'function ftIndustryLabelFor(code){var m=findFtIndustry(code);return m?m.label:code;}' +
+    'function renderFtIndustryToggle(){' +
+      'var html="";' +
+      'if(FT_DATA.industries.length>1){' +
+        'html+="<div class=\\"industry-toggle\\">"+FT_DATA.industries.map(function(i){return "<button class=\\"industry-btn"+(i.code===FT_CURRENT?" active":"")+"\\" onclick=\\"selectFtIndustry(\'"+i.code+"\')\\">"+esc(i.label)+"</button>";}).join("")+"</div>";' +
+      '}' +
+      'document.getElementById("ft-filter-bar").innerHTML=html;' +
+    '}' +
+    'function selectFtIndustry(code){' +
+      'FT_CURRENT=code;' +
+      'renderFtIndustryToggle();' +
+      'renderFt();' +
+      'updateHeaderLabel();' +
+    '}' +
+    'function ftTbc(v){return v?esc(toTitleCase(v)):"<span class=\\"tbc\\">TBC</span>";}' +
+    'function buildFtStatCards(rows){return "<div class=\\"stat-row\\">"+statCard(rows.length,"Total onboarding")+"</div>";}' +
+    'function buildFtStatusBar(rows){' +
+      'var counts={};var total=rows.length;' +
+      'FT_STATUS_ORDER.forEach(function(s){counts[s]=0;});' +
+      'rows.forEach(function(r){var s=r.status||"";if(counts[s]===undefined)counts[s]=0;counts[s]++;});' +
+      'var statuses=FT_STATUS_ORDER.concat(Object.keys(counts).filter(function(s){return FT_STATUS_ORDER.indexOf(s)===-1;}));' +
+      'if(total===0)return "";' +
+      'var segments=statuses.map(function(s){var n=counts[s]||0;if(n===0)return "";var color=FT_STATUS_COLORS[s]||DEFAULT_COLOR;var pct=(n/total*100).toFixed(2);return "<div class=\\"bar-segment\\" style=\\"width:"+pct+"%;background:"+color+"\\" title=\\""+esc(s)+": "+n+"\\"></div>";}).join("");' +
+      'var legend=statuses.map(function(s){var n=counts[s]||0;if(n===0)return "";var color=FT_STATUS_COLORS[s]||DEFAULT_COLOR;return "<div class=\\"legend-item\\"><span class=\\"legend-dot\\" style=\\"background:"+color+"\\"></span>"+esc(s)+" <span class=\\"legend-count\\">"+n+"</span></div>";}).join("");' +
+      'return "<div class=\\"section\\"><div class=\\"section-title\\">By status</div><div class=\\"bar\\">"+segments+"</div><div class=\\"legend\\">"+legend+"</div></div>";' +
+    '}' +
+    'function ftChecklistHtml(r){' +
+      'var total=r.checklistTotal||0;var done=r.checklistDone||0;' +
+      'if(total===0)return "<span class=\\"muted\\">\\u2014</span>";' +
+      'var pct=Math.round(done/total*100);' +
+      'return "<span class=\\"fill\\"><i style=\\"width:"+pct+"%\\"></i></span>"+done+"/"+total;' +
+    '}' +
+    'function ftOutletCell(r,industry){' +
+      'var badge="";' +
+      'if(r.outletEditedBy){' +
+        'if(r.outletSynced){' +
+          'badge="<span class=\\"updated-badge\\">Last updated by "+esc(r.outletEditedBy)+" \\u00B7 "+esc(fmtDate(r.outletEditedAt))+"</span>";' +
+        '}else{' +
+          'badge="<span class=\\"sync-fail-badge\\">Last updated by "+esc(r.outletEditedBy)+" \\u00B7 "+esc(fmtDate(r.outletEditedAt))+" \\u00B7 Not synced</span>";' +
+        '}' +
+      '}' +
+      'var tdOpen=(r.outletSynced===false)?"<td class=\\"sync-fail\\">":"<td>";' +
+      'if(!industry.canEdit){' +
+        'var plain=r.outlet?esc(toTitleCase(r.outlet)):"<span class=\\"tbc\\">TBC</span>";' +
+        'return tdOpen+plain+badge+"</td>";' +
+      '}' +
+      'var cls=r.outlet?"editable-outlet":"editable-tbc";' +
+      'var label=r.outlet?esc(toTitleCase(r.outlet)):"TBC";' +
+      'return tdOpen+"<span class=\\""+cls+"\\" onclick=\\"openFtOutletEditor(this,\'"+r.id+"\')\\">"+label+" \\u270E</span>"+badge+"</td>";' +
+    '}' +
+    'function buildFtTable(rows,industry){' +
+      'var groups={};var order=[];' +
+      'rows.forEach(function(r){var s=r.status||"";if(!groups[s]){groups[s]=[];order.push(s);}groups[s].push(r);});' +
+      'var statusOrder=FT_STATUS_ORDER.concat(order.filter(function(s){return FT_STATUS_ORDER.indexOf(s)===-1;}));' +
+      'var body="";' +
+      'statusOrder.forEach(function(status){' +
+        'var members=groups[status];if(!members||members.length===0)return;' +
+        'var color=FT_STATUS_COLORS[status]||DEFAULT_COLOR;' +
+        'body+="<tr class=\\"group-header\\"><td colspan=\\"7\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
+        'members.forEach(function(r){' +
+          'body+="<tr>"+"<td>"+esc(toTitleCase(r.fullName))+"</td><td>"+ftTbc(r.position)+"</td>"+ftOutletCell(r,industry)+"<td>"+ftTbc(r.department)+"</td><td"+(r.dueDate?"":" class=\\"tbc\\"")+">"+(r.dueDate?esc(fmtDate(r.dueDate)):"TBC")+"</td><td class=\\"muted\\">"+esc(r.assignee||"Unassigned")+"</td><td class=\\"checklist\\">"+ftChecklistHtml(r)+"</td></tr>";' +
+        '});' +
+      '});' +
+      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Full Name</th><th>Position</th><th>Outlet</th><th>Department</th><th>Join Date</th><th>HR In-Charge</th><th>Checklist</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
+    '}' +
+    'function ftEmptyState(){' +
+      'return "<div class=\\"section\\" style=\\"text-align:center;padding:32px 18px;\\"><div style=\\"font-size:15px;margin-bottom:4px;\\">Nothing\\u2019s cooking here right now.</div><div class=\\"muted\\">No one\\u2019s onboarding in this industry at the moment.</div></div>";' +
+    '}' +
+    'function renderFt(){' +
+      'var el=document.getElementById("ft-dashboard-body");' +
+      'if(!FT_DATA||!FT_DATA.industries.length){el.innerHTML="";return;}' +
+      'var industry=findFtIndustry(FT_CURRENT);' +
+      'var rows=industry.rows;' +
+      'if(rows.length===0){el.innerHTML=ftEmptyState();return;}' +
+      'el.innerHTML=buildFtStatCards(rows)+buildFtStatusBar(rows)+buildFtTable(rows,industry);' +
+    '}' +
+    'function openFtOutletEditor(spanEl,taskId){' +
+      'var industry=findFtIndustry(FT_CURRENT);' +
+      'var row=industry.rows.filter(function(r){return r.id===taskId;})[0];' +
+      'if(!row)return;' +
+      'var td=spanEl.closest("td");' +
+      'if(!td)return;' +
+      'var opts=industry.outlets.map(function(o){return "<option value=\\""+esc(o)+"\\""+(o===row.outlet?" selected":"")+">"+esc(o)+"</option>";}).join("");' +
+      'td.innerHTML="<select id=\\"ftOutletSelect_"+taskId+"\\">"+opts+"</select> <button class=\\"add-btn\\" onclick=\\"saveFtOutlet(\'"+taskId+"\')\\">Save</button> <button class=\\"remove-btn\\" onclick=\\"renderFt()\\">Cancel</button>";' +
+    '}' +
+    'function saveFtOutlet(taskId){' +
+      'var sel=document.getElementById("ftOutletSelect_"+taskId);' +
+      'if(!sel)return;' +
+      'var newOutlet=sel.value;' +
+      'var industryCode=FT_CURRENT;' +
+      'google.script.run.withSuccessHandler(function(data){FT_DATA=data;renderFtIndustryToggle();renderFt();}).withFailureHandler(function(err){alert("Couldn\\u2019t save: "+(err&&err.message?err.message:String(err)));renderFt();}).updateFtOutlet(SESSION_TOKEN,industryCode,taskId,newOutlet);' +
+    '}' +
+    'var LAST_FT_ACCESS_DATA=null;' +
+    'function openFtAccessPanel(){' +
+      'document.getElementById("ftAccessModal").style.display="flex";' +
+      'document.getElementById("ftAccessModalContent").innerHTML="<p class=\\"muted\\">Loading\\u2026</p>";' +
+      'google.script.run.withSuccessHandler(renderFtAccessPanel).withFailureHandler(ftAccessPanelError).listFtAccess(SESSION_TOKEN);' +
+    '}' +
+    'function closeFtAccessPanel(){document.getElementById("ftAccessModal").style.display="none";}' +
+    'function ftAccessPanelError(err){' +
+      'var msg=err&&err.message?err.message:String(err);' +
+      'var box=document.getElementById("ftAccessModalContent");' +
+      'if(box)box.innerHTML="<button class=\\"modal-close\\" onclick=\\"closeFtAccessPanel()\\">&times;</button><h2>Manage FT Access</h2><div class=\\"access-error\\">"+esc(msg)+"</div>";' +
+    '}' +
+    'function ftIndustryLabelForData(data,code){var m=(data.industries||[]).filter(function(i){return i.code===code;})[0];return m?m.label:code;}' +
+    'function renderFtAccessPanel(data){' +
+      'LAST_FT_ACCESS_DATA=data;' +
+      'var html="<button class=\\"modal-close\\" onclick=\\"closeFtAccessPanel()\\">&times;</button>";' +
+      'html+="<h2>Manage FT Access</h2><div class=\\"muted\\" style=\\"margin-bottom:8px;\\">Super Admin always has full access \\u2014 this list is for granting FT access to others.</div>";' +
+      'html+="<div class=\\"access-error\\" id=\\"topFtAccessError\\"></div>";' +
+      'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">FT Admins <span class=\\"muted\\">\\u2014 every industry, view only</span></div>";' +
+      'data.admins.forEach(function(a,i){' +
+        'html+="<div class=\\"access-row\\"><span>"+esc(a)+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveFtAdmin("+i+")})\\">Remove</button></div>";' +
+      '});' +
+      'if(data.admins.length===0)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No FT Admins yet.</div>";' +
+      'html+="<div class=\\"add-form\\"><input type=\\"email\\" id=\\"newFtAdminEmail\\" placeholder=\\"name@company.com\\"/><button class=\\"add-btn\\" onclick=\\"doAddFtAdmin()\\">Add FT Admin</button></div>";' +
+      'html+="<div class=\\"access-error\\" id=\\"ftAdminError\\"></div></div>";' +
+      'html+="<div class=\\"access-section\\"><div class=\\"section-title\\">FT Editors <span class=\\"muted\\">\\u2014 one industry, can edit Outlet</span></div>";' +
+      'var industryOpts=data.industries.map(function(i){return "<option value=\\""+esc(i.code)+"\\">"+esc(i.label)+"</option>";}).join("");' +
+      'data.editors.forEach(function(e,i){' +
+        'html+="<div class=\\"access-row\\"><span>"+esc(e.email)+"</span><span style=\\"display:flex;align-items:center;gap:8px;\\"><span class=\\"muted\\">"+esc(ftIndustryLabelForData(data,e.industry))+"</span><button class=\\"remove-btn\\" onclick=\\"armConfirm(this,function(){doRemoveFtEditor("+i+")})\\">Remove</button></span></div>";' +
+      '});' +
+      'if(data.editors.length===0)html+="<div class=\\"muted\\" style=\\"padding:6px 0;\\">No FT Editors yet.</div>";' +
+      'html+="<div class=\\"add-form\\"><input type=\\"email\\" id=\\"newFtEditorEmail\\" placeholder=\\"name@company.com\\"/><select id=\\"newFtEditorIndustry\\">"+industryOpts+"</select><button class=\\"add-btn\\" onclick=\\"doAddFtEditor()\\">Add FT Editor</button></div>";' +
+      'html+="<div class=\\"access-error\\" id=\\"ftEditorError\\"></div></div>";' +
+      'document.getElementById("ftAccessModalContent").innerHTML=html;' +
+    '}' +
+    'function doAddFtAdmin(){' +
+      'var el=document.getElementById("newFtAdminEmail");' +
+      'var email=el.value.trim();' +
+      'var errBox=document.getElementById("ftAdminError");' +
+      'if(errBox)errBox.textContent="";' +
+      'if(!email){if(errBox)errBox.textContent="Enter an email address.";return;}' +
+      'var prevData=LAST_FT_ACCESS_DATA;' +
+      'var optimistic={admins:prevData.admins.concat([email]),editors:prevData.editors,industries:prevData.industries};' +
+      'renderFtAccessPanel(optimistic);' +
+      'el.value="";' +
+      'google.script.run.withSuccessHandler(renderFtAccessPanel).withFailureHandler(function(err){renderFtAccessPanel(prevData);var e=document.getElementById("ftAdminError");if(e)e.textContent=err&&err.message?err.message:String(err);}).addFtAdmin(SESSION_TOKEN,email);' +
+    '}' +
+    'function doRemoveFtAdmin(i){' +
+      'if(!LAST_FT_ACCESS_DATA||!LAST_FT_ACCESS_DATA.admins[i])return;' +
+      'var email=LAST_FT_ACCESS_DATA.admins[i];' +
+      'var errBox=document.getElementById("topFtAccessError");' +
+      'if(errBox)errBox.textContent="";' +
+      'var prevData=LAST_FT_ACCESS_DATA;' +
+      'var optimistic={admins:prevData.admins.filter(function(a,idx){return idx!==i;}),editors:prevData.editors,industries:prevData.industries};' +
+      'renderFtAccessPanel(optimistic);' +
+      'google.script.run.withSuccessHandler(renderFtAccessPanel).withFailureHandler(function(err){renderFtAccessPanel(prevData);var e=document.getElementById("topFtAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeFtAdmin(SESSION_TOKEN,email);' +
+    '}' +
+    'function doAddFtEditor(){' +
+      'var emailEl=document.getElementById("newFtEditorEmail");' +
+      'var industryEl=document.getElementById("newFtEditorIndustry");' +
+      'var email=emailEl.value.trim();' +
+      'var industry=industryEl.value;' +
+      'var errBox=document.getElementById("ftEditorError");' +
+      'if(errBox)errBox.textContent="";' +
+      'if(!email){if(errBox)errBox.textContent="Enter an email address.";return;}' +
+      'var prevData=LAST_FT_ACCESS_DATA;' +
+      'var emailLower=email.toLowerCase();' +
+      'var optimistic={admins:prevData.admins,editors:prevData.editors.filter(function(e){return e.email.toLowerCase()!==emailLower;}).concat([{email:email,industry:industry}]),industries:prevData.industries};' +
+      'renderFtAccessPanel(optimistic);' +
+      'emailEl.value="";' +
+      'google.script.run.withSuccessHandler(renderFtAccessPanel).withFailureHandler(function(err){renderFtAccessPanel(prevData);var e=document.getElementById("ftEditorError");if(e)e.textContent=err&&err.message?err.message:String(err);}).addFtEditor(SESSION_TOKEN,email,industry);' +
+    '}' +
+    'function doRemoveFtEditor(i){' +
+      'if(!LAST_FT_ACCESS_DATA||!LAST_FT_ACCESS_DATA.editors[i])return;' +
+      'var email=LAST_FT_ACCESS_DATA.editors[i].email;' +
+      'var errBox=document.getElementById("topFtAccessError");' +
+      'if(errBox)errBox.textContent="";' +
+      'var prevData=LAST_FT_ACCESS_DATA;' +
+      'var optimistic={admins:prevData.admins,editors:prevData.editors.filter(function(e,idx){return idx!==i;}),industries:prevData.industries};' +
+      'renderFtAccessPanel(optimistic);' +
+      'google.script.run.withSuccessHandler(renderFtAccessPanel).withFailureHandler(function(err){renderFtAccessPanel(prevData);var e=document.getElementById("topFtAccessError");if(e)e.textContent=err&&err.message?err.message:String(err);}).removeFtEditor(SESSION_TOKEN,email);' +
     '}';
 }
 
@@ -1325,6 +1870,21 @@ function HtmlOutput_(title, bodyHtml) {
       '.add-form input[type=email]{flex:1;min-width:180px;}' +
       '.add-btn{background:#1c1c1c;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;flex-shrink:0;}' +
       '.access-error{color:#c0392b;font-size:12px;margin-top:6px;min-height:14px;}' +
+
+      '.app-tabs{display:flex;gap:6px;margin-top:6px;}' +
+      '.app-tab{font-size:13px;padding:6px 14px;border-radius:20px;border:1px solid #ddd;background:#fff;color:#6b6f76;cursor:pointer;}' +
+      '.app-tab.active{background:#1c1c1c;color:#fff;border-color:#1c1c1c;}' +
+      '.industry-toggle{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}' +
+      '.industry-btn{font-size:13px;padding:6px 16px;border-radius:20px;border:1px solid #ddd;background:#fff;color:#1c1c1c;cursor:pointer;}' +
+      '.industry-btn.active{background:#7b68ee;color:#fff;border-color:#7b68ee;}' +
+      '.tbc{color:#6b6f76;font-style:italic;}' +
+      '.editable-outlet,.editable-tbc{border-bottom:1px dashed #7b68ee;color:#7b68ee;cursor:pointer;}' +
+      '.updated-badge{display:block;font-size:11px;color:#7b68ee;font-weight:normal;margin-top:1px;}' +
+      'td.sync-fail{background:#fdecea;border-left:3px solid #a12b1f;white-space:normal;}' +
+      '.sync-fail-badge{display:block;font-size:11px;color:#a12b1f;font-weight:600;margin-top:2px;}' +
+      '.checklist{font-size:12px;color:#6b6f76;white-space:nowrap;}' +
+      '.checklist .fill{display:inline-block;width:40px;height:5px;background:#eee;border-radius:3px;position:relative;margin-right:6px;vertical-align:middle;}' +
+      '.checklist .fill i{position:absolute;inset:0;background:#7b68ee;border-radius:3px;display:block;}' +
     '</style></head><body>' + bodyHtml + '</body></html>';
   return HtmlService.createHtmlOutput(html)
     .setTitle(title)
