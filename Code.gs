@@ -357,11 +357,6 @@ function computeDashboardCountries_(email) {
       var wanted = {};
       outletOptions.forEach(function (o) { wanted[o.toLowerCase()] = true; });
       var rows = getClickUpTasks_(c).filter(function (t) { return wanted[t.outlet.toLowerCase()]; });
-      // Only a plain PIC (this branch) ever gets to acknowledge a completed
-      // onboarding - Admins/Viewers see the same acknowledged badge (attached
-      // by applyPtAckLog_ inside getClickUpTasks_ above) but never the button
-      // itself, since acknowledging is deliberately a PIC-only action.
-      rows.forEach(function (r) { r.canAcknowledge = r.status === 'ONBOARDING COMPLETE' && !r.acknowledged; });
       countries.push({ code: c.code, label: c.label, outletsLabel: outletOptions.join(', '), rows: rows, outlets: outletOptions });
     });
     if (countries.length === 0) {
@@ -375,6 +370,24 @@ function computeDashboardCountries_(email) {
       };
     }
   }
+
+  // Acknowledging is tied to actually being a PIC mapped to a row's outlet -
+  // never to which branch/role rendered the dashboard - so someone who is
+  // BOTH an Admin and a mapped PIC for a specific outlet (e.g. testing their
+  // own account) still gets the button on those rows, even from the admin
+  // view. Applied once here, after every branch above has assembled its rows,
+  // rather than duplicated in each branch.
+  countries.forEach(function (c) {
+    var outlets = getOutletsForEmail_(email, c.code).map(function (o) { return o.toLowerCase(); });
+    if (outlets.length === 0) return;
+    var wanted = {};
+    outlets.forEach(function (o) { wanted[o] = true; });
+    c.rows.forEach(function (r) {
+      if (wanted[String(r.outlet || '').toLowerCase()]) {
+        r.canAcknowledge = r.status === 'ONBOARDING COMPLETE' && !r.acknowledged;
+      }
+    });
+  });
 
   return { isAdmin: isAdmin, roleLabel: roleLabel, countries: countries };
 }
