@@ -972,14 +972,16 @@ function getFtOutletOptions_(industryCode) {
 }
 
 // Tracks manual portal edits to a task's Outlet field, keyed by ClickUp task id,
-// so the dashboard can show a "Last updated by X - date" badge (and a
-// persistent "Not synced" flag if the write to ClickUp failed) - see
-// updateFtOutlet/applyFtEditLog_. previousOutlet is the live value at the
-// moment of the edit attempt, which is what lets applyFtEditLog_ tell "still
-// unresolved" apart from "someone since fixed it directly in ClickUp" without
-// any extra bookkeeping. Small enough (one entry per task ever manually
-// edited, self-pruning) to live in Properties like the rest of this file's
-// access-control state.
+// as an ever-growing (capped) array of {outlet, previousOutlet, by, at, synced}
+// entries - a real audit trail, shown as a Google-Sheets-style note on hover
+// (see ftShowNote/ftOutletCell in clientEngine_), not just the latest edit.
+// previousOutlet on each entry is the live value at the moment of that edit
+// attempt, which is what lets applyFtEditLog_ tell "still unresolved" apart
+// from "someone since fixed it directly in ClickUp" by comparing against only
+// the most recent entry - see there. Entries are never deleted, even once
+// superseded by a direct ClickUp change, since the whole point is a durable
+// history; each task's list is just capped (see updateFtOutlet) so this can't
+// grow without bound.
 function getFtEditLog_() {
   var raw = PropertiesService.getScriptProperties().getProperty('FT_EDIT_LOG');
   return raw ? JSON.parse(raw) : {};
@@ -989,42 +991,32 @@ function saveFtEditLog_(log) {
   PropertiesService.getScriptProperties().setProperty('FT_EDIT_LOG', JSON.stringify(log));
 }
 
-// Merges the edit log onto a set of rows fresh from ClickUp (via cache). Three
-// cases per logged task: (1) ClickUp's live Outlet now matches what we tried to
-// set - show the "Last updated by" badge, synced; (2) it still matches what it
-// was *before* our edit - our write never landed, show the attempted value with
-// a persistent "Not synced" flag; (3) it matches neither - someone changed it
-// directly in ClickUp since, so the log entry is stale and gets dropped.
+// Merges each task's edit history onto a set of rows fresh from ClickUp (via
+// cache). The full history rides along on the row (r.history) purely for the
+// hover note's audit trail - only the MOST RECENT entry ever affects the row's
+// displayed outlet/sync state, via the same three cases as before: (1)
+// ClickUp's live Outlet now matches what we tried to set - synced; (2) it
+// still matches what it was *before* that edit - our write never landed
+// (or the Fetcher just hasn't caught up yet), show the attempted value
+// flagged; (3) it matches neither - someone changed it directly in ClickUp
+// since, so there's no active edit to show, but the history itself stays.
 function applyFtEditLog_(rows) {
   var log = getFtEditLog_();
   var changed = false;
   rows.forEach(function (r) {
-    var entry = log[r.id];
-    if (!entry) return;
-    if (r.outlet === entry.outlet) {
-      // ClickUp's live value now matches what we tried to set - whether that's
-      // because our own write succeeded, or the Fetcher just hasn't caught up
-      // to a *failed* write's eventual manual fix that happened to land on the
-      // same value, either way this is resolved: show the badge as synced.
-      r.outletEditedBy = entry.by;
-      r.outletEditedAt = entry.at;
+    var history = log[r.id];
+    if (!history || history.length === 0) return;
+    r.history = history;
+    var latest = history[history.length - 1];
+    if (r.outlet === latest.outlet) {
       r.outletSynced = true;
-      if (!entry.synced) { entry.synced = true; changed = true; }
-    } else if (r.outlet === entry.previousOutlet) {
-      // Live value hasn't moved since our edit attempt - the Fetcher's next
-      // poll (up to a minute away) just hasn't caught up yet. Trust what the
-      // write attempt itself reported rather than re-deriving it from a cache
-      // that's known to still be stale.
-      r.outlet = entry.outlet;
-      r.outletEditedBy = entry.by;
-      r.outletEditedAt = entry.at;
-      r.outletSynced = entry.synced;
-    } else {
-      // Live value is neither what we tried to set nor what it was before -
-      // someone changed it directly in ClickUp since. Our record is stale.
-      delete log[r.id];
-      changed = true;
+      if (!latest.synced) { latest.synced = true; changed = true; }
+    } else if (r.outlet === latest.previousOutlet) {
+      r.outlet = latest.outlet;
+      r.outletSynced = latest.synced;
     }
+    // else: live value has moved on independently since the latest edit -
+    // no override, no synced flag, but r.history still renders the note.
   });
   if (changed) saveFtEditLog_(log);
   return rows;
@@ -1077,9 +1069,9 @@ function getFtDashboardData(token) {
 // Library mechanism, same direction-reversed trick pushData's own header
 // comment describes) - this project deliberately never holds a ClickUp token
 // itself, exactly like the rest of the file. Whether or not the write
-// succeeds, the attempt is recorded in FT_EDIT_LOG so the dashboard can show
-// the right badge (see applyFtEditLog_) - a failed write still keeps the
-// attempted value visible, just flagged, rather than silently reverting.
+// succeeds, the attempt is appended to FT_EDIT_LOG's history for this task
+// (see applyFtEditLog_) - a failed write still keeps the attempted value
+// visible, just flagged, rather than silently reverting.
 function updateFtOutlet(token, industryCode, taskId, newOutlet) {
   var auth = requireFtAccess_(token);
   if (!ftCanEditOutlet_(auth.access, industryCode)) throw new Error('Not authorized to edit this field.');
@@ -1111,7 +1103,12 @@ function updateFtOutlet(token, industryCode, taskId, newOutlet) {
   }
 
   var log = getFtEditLog_();
-  log[taskId] = { outlet: newOutlet, previousOutlet: previousOutlet, by: auth.email, at: new Date().toISOString(), synced: synced };
+  var history = log[taskId] || [];
+  history.push({ outlet: newOutlet, previousOutlet: previousOutlet, by: auth.email, at: new Date().toISOString(), synced: synced });
+  // Cap per-task history so a task edited unusually often can't grow this
+  // Property without bound - old entries fall off the front, oldest first.
+  if (history.length > 20) history = history.slice(history.length - 20);
+  log[taskId] = history;
   saveFtEditLog_(log);
 
   return getFtDashboardData(token);
@@ -1249,6 +1246,7 @@ function renderShell_(ptResult, ftAccess, ftData, email, token) {
     '<div id="accessModal" class="modal-overlay" style="display:none;"><div class="modal" id="accessModalContent"></div></div>' +
     '<div id="categoriesModal" class="modal-overlay" style="display:none;"><div class="modal" id="categoriesModalContent"></div></div>' +
     '<div id="ftAccessModal" class="modal-overlay" style="display:none;"><div class="modal" id="ftAccessModalContent"></div></div>' +
+    '<div id="ftNotePopup" class="ft-note-popup"></div>' +
     '<script>' + clientEngine_() +
       '\nvar SESSION_TOKEN=' + JSON.stringify(token || '') + ';' +
       '\nvar HAS_PT=' + (hasPt ? 'true' : 'false') + ';' +
@@ -1667,24 +1665,40 @@ function clientEngine_() {
     '}' +
     'function ftShortName(v){var s=String(v||"");var at=s.indexOf("@");return at===-1?s:s.slice(0,at);}' +
     'function ftOutletCell(r,industry){' +
-      'var badge="";' +
-      'if(r.outletEditedBy){' +
-        'var shortLine="Last updated by "+ftShortName(r.outletEditedBy)+" \\u00B7 "+fmtDate(r.outletEditedAt);' +
-        'var fullLine="Last updated by "+r.outletEditedBy+" \\u00B7 "+fmtDate(r.outletEditedAt);' +
-        'if(r.outletSynced){' +
-          'badge="<span class=\\"updated-badge\\" title=\\""+esc(fullLine)+"\\">"+esc(shortLine)+"</span>";' +
-        '}else{' +
-          'badge="<span class=\\"sync-fail-badge\\" title=\\""+esc(fullLine+" \\u00B7 Not synced")+"\\">"+esc(shortLine)+" \\u00B7 Not synced</span>";' +
-        '}' +
-      '}' +
-      'var tdOpen=(r.outletSynced===false)?"<td class=\\"sync-fail\\">":"<td>";' +
+      'var hasHistory=r.history&&r.history.length>0;' +
+      'var isFail=r.outletSynced===false;' +
+      'var tdCls=hasHistory?(isFail?"ft-noted ft-fail":"ft-noted"):"";' +
+      'var flag=hasHistory?"<span class=\\"ft-note-flag"+(isFail?" fail":"")+"\\" onmouseenter=\\"ftShowNote(this,\'"+r.id+"\')\\" onmouseleave=\\"ftHideNote()\\"></span>":"";' +
       'if(!industry.canEdit){' +
         'var plain=r.outlet?esc(toTitleCase(r.outlet)):"<span class=\\"tbc\\">TBC</span>";' +
-        'return tdOpen+plain+badge+"</td>";' +
+        'return "<td class=\\""+tdCls+"\\">"+plain+flag+"</td>";' +
       '}' +
       'var cls=r.outlet?"editable-outlet":"editable-tbc";' +
       'var label=r.outlet?esc(toTitleCase(r.outlet)):"TBC";' +
-      'return tdOpen+"<span class=\\""+cls+"\\" onclick=\\"openFtOutletEditor(this,\'"+r.id+"\')\\">"+label+" \\u270E</span>"+badge+"</td>";' +
+      'return "<td class=\\""+tdCls+"\\"><span class=\\""+cls+"\\" onclick=\\"openFtOutletEditor(this,\'"+r.id+"\')\\">"+label+" \\u270E</span>"+flag+"</td>";' +
+    '}' +
+    'function ftShowNote(el,taskId){' +
+      'var industry=findFtIndustry(FT_CURRENT);' +
+      'var row=industry&&industry.rows.filter(function(r){return r.id===taskId;})[0];' +
+      'if(!row||!row.history)return;' +
+      'var entries=row.history.slice(-8).slice().reverse();' +
+      'var items=entries.map(function(h){' +
+        'var value=h.outlet?esc(toTitleCase(h.outlet)):"TBC";' +
+        'var status=h.synced?"<span class=\\"ft-note-ok\\">Synced</span>":"<span class=\\"ft-note-fail-tag\\">Not synced</span>";' +
+        'return "<div class=\\"ft-note-entry\\">"+esc(fmtDate(h.at))+" \\u00B7 "+esc(ftShortName(h.by))+" \\u2192 "+value+" "+status+"</div>";' +
+      '}).join("");' +
+      'var popup=document.getElementById("ftNotePopup");' +
+      'if(!popup)return;' +
+      'popup.innerHTML="<div class=\\"ft-note-title\\">Edit history</div>"+items;' +
+      'popup.style.display="block";' +
+      'var rect=el.getBoundingClientRect();' +
+      'popup.style.top=(rect.bottom+6)+"px";' +
+      'var left=rect.right-220;' +
+      'popup.style.left=(left<8?8:left)+"px";' +
+    '}' +
+    'function ftHideNote(){' +
+      'var popup=document.getElementById("ftNotePopup");' +
+      'if(popup)popup.style.display="none";' +
     '}' +
     'function buildFtTable(rows,industry){' +
       'var groups={};var order=[];' +
@@ -1890,9 +1904,15 @@ function HtmlOutput_(title, bodyHtml) {
       '.industry-btn.active{background:#7b68ee;color:#fff;border-color:#7b68ee;}' +
       '.tbc{color:#6b6f76;font-style:italic;}' +
       '.editable-outlet,.editable-tbc{border-bottom:1px dashed #7b68ee;color:#7b68ee;cursor:pointer;}' +
-      '.updated-badge{display:block;font-size:11px;color:#7b68ee;font-weight:normal;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;}' +
-      'td.sync-fail{background:#fdecea;border-left:3px solid #a12b1f;}' +
-      '.sync-fail-badge{display:block;font-size:11px;color:#a12b1f;font-weight:600;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;}' +
+      'td.ft-noted{position:relative;background:#fff9c4;}' +
+      'td.ft-noted.ft-fail{background:#fdecea;}' +
+      '.ft-note-flag{position:absolute;top:1px;right:1px;width:0;height:0;border-style:solid;border-width:0 9px 9px 0;border-color:transparent #f1c232 transparent transparent;cursor:pointer;}' +
+      '.ft-note-flag.fail{border-color:transparent #c0392b transparent transparent;}' +
+      '.ft-note-popup{display:none;position:fixed;z-index:2000;background:#1c1c1c;color:#fff;font-size:11px;line-height:1.6;padding:10px 12px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);max-width:280px;}' +
+      '.ft-note-title{font-weight:700;margin-bottom:4px;font-size:10px;text-transform:uppercase;letter-spacing:0.03em;color:#aaa;}' +
+      '.ft-note-entry{white-space:normal;margin-bottom:3px;}' +
+      '.ft-note-ok{color:#8ee7a1;}' +
+      '.ft-note-fail-tag{color:#f0958a;font-weight:600;}' +
       '.checklist{font-size:12px;color:#6b6f76;white-space:nowrap;}' +
       '.checklist .fill{display:inline-block;width:40px;height:5px;background:#eee;border-radius:3px;position:relative;margin-right:6px;vertical-align:middle;}' +
       '.checklist .fill i{position:absolute;inset:0;background:#7b68ee;border-radius:3px;display:block;}' +
