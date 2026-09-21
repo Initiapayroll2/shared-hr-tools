@@ -104,15 +104,35 @@
 
 // Each country's Outlet/Position/Full Name come from its own ClickUp custom fields -
 // SG's are named "Outlet"/"Role"/"Full Name", MY's are named "Assigned Outlet"/
-// "Official Part-time Position"/"Full Name (as per NRIC/ID)".
+// "Official Part-time Position"/"Full Name (as per NRIC/ID)" - shared across every
+// industry List within that country (confirmed 2026-09-21 that the new Salon/Back
+// Office lists reuse the same field names as each country's original F&B list).
+// Each country onboards from more than one ClickUp List, one per industry - added
+// 2026-09-21 at the user's request for industry tabs alongside F&B. Not every
+// country has every industry (there's no SG Office list yet) - deliberately
+// asymmetric, same as FT_INDUSTRIES below. getClickUpTasks_/getOutletOptionsForCountry_
+// merge every industry's rows/outlets together per country, tagging each row with
+// which industry it came from (industry/industryLabel) purely for the client's
+// industry-tab UI - PIC access itself stays entirely outlet-name-based (see
+// PIC_MAPPINGS), so a PIC mapped to an outlet sees that outlet's rows regardless of
+// which industry list they actually live in, with zero mapping changes needed.
 var COUNTRIES = [
   {
-    code: 'SG', label: 'Singapore', listId: '901819849781',
-    fullNameField: 'Full Name', outletField: 'Outlet', roleField: 'Role'
+    code: 'SG', label: 'Singapore',
+    fullNameField: 'Full Name', outletField: 'Outlet', roleField: 'Role',
+    industries: [
+      { code: 'fnb', label: 'F&B', listId: '901819849781' },
+      { code: 'salon', label: 'Salon', listId: '901820081024' }
+    ]
   },
   {
-    code: 'MY', label: 'Malaysia', listId: '901819757280',
-    fullNameField: 'Full Name (as per NRIC/ID)', outletField: 'Assigned Outlet', roleField: 'Official Part-time Position'
+    code: 'MY', label: 'Malaysia',
+    fullNameField: 'Full Name (as per NRIC/ID)', outletField: 'Assigned Outlet', roleField: 'Official Part-time Position',
+    industries: [
+      { code: 'fnb', label: 'F&B', listId: '901819757280' },
+      { code: 'salon', label: 'Salon', listId: '901819757285' },
+      { code: 'office', label: 'Back Office', listId: '901820013727' }
+    ]
   }
 ];
 
@@ -240,6 +260,13 @@ function renderDashboardOrError_(email, token) {
   }
 }
 
+// The client-safe {code, label} list for a country's industry tabs - shared by
+// every branch of computeDashboardCountries_ below so each rendered country
+// descriptor carries its own industries regardless of which branch built it.
+function industriesFor_(country) {
+  return country.industries.map(function (i) { return { code: i.code, label: i.label }; });
+}
+
 // Shared by doGetInner_ (full page load) and getDashboardData (in-page Refresh
 // button) so both compute a signed-in visitor's countries/rows identically.
 // Returns { isAdmin, roleLabel, countries } on success, or { isAdmin, roleLabel,
@@ -263,7 +290,8 @@ function computeDashboardCountries_(email) {
         label: c.label,
         outletsLabel: c.label + (adminScope === 'super' ? ' (admin view)' : ' (all outlets)'),
         rows: rows,
-        outlets: getOutletOptionsForCountry_(c)
+        outlets: getOutletOptionsForCountry_(c),
+        industries: industriesFor_(c)
       };
     });
   } else if (adminScope === 'SG' || adminScope === 'MY') {
@@ -275,7 +303,8 @@ function computeDashboardCountries_(email) {
       label: scopedCountry.label,
       outletsLabel: scopedCountry.label + ' (' + ADMIN_ROLE_LABELS[adminScope] + ' view)',
       rows: getClickUpTasks_(scopedCountry),
-      outlets: getOutletOptionsForCountry_(scopedCountry)
+      outlets: getOutletOptionsForCountry_(scopedCountry),
+      industries: industriesFor_(scopedCountry)
     }];
   } else if (viewerScope === 'SG' || viewerScope === 'MY') {
     // Country-scoped Viewer: full unfiltered read-only view of just this one country,
@@ -286,7 +315,8 @@ function computeDashboardCountries_(email) {
       label: viewerCountry.label,
       outletsLabel: viewerCountry.label + ' (all outlets)',
       rows: getClickUpTasks_(viewerCountry),
-      outlets: getOutletOptionsForCountry_(viewerCountry)
+      outlets: getOutletOptionsForCountry_(viewerCountry),
+      industries: industriesFor_(viewerCountry)
     }];
   } else if (viewerScope && viewerScope.indexOf('_') !== -1) {
     // Country + category scoped Viewer (e.g. "SG_fnb" = "SG F&B only"): the same
@@ -317,7 +347,8 @@ function computeDashboardCountries_(email) {
       label: compoundCountry.label,
       outletsLabel: compoundCountry.label + ' (' + (CATEGORY_LABELS[compoundCategory] || compoundCategory) + ')',
       rows: compoundRows,
-      outlets: uniqueOutlets_(compoundRows)
+      outlets: uniqueOutlets_(compoundRows),
+      industries: industriesFor_(compoundCountry)
     }];
   } else if (viewerScope) {
     // Scoped Viewer (F&B / Salon / Others / Group Management): filter every country's
@@ -336,7 +367,8 @@ function computeDashboardCountries_(email) {
         label: c.label,
         outletsLabel: c.label + ' (' + (CATEGORY_LABELS[viewerScope] || viewerScope) + ')',
         rows: rows,
-        outlets: uniqueOutlets_(rows)
+        outlets: uniqueOutlets_(rows),
+        industries: industriesFor_(c)
       });
     });
     if (countries.length === 0) {
@@ -357,7 +389,7 @@ function computeDashboardCountries_(email) {
       var wanted = {};
       outletOptions.forEach(function (o) { wanted[o.toLowerCase()] = true; });
       var rows = getClickUpTasks_(c).filter(function (t) { return wanted[t.outlet.toLowerCase()]; });
-      countries.push({ code: c.code, label: c.label, outletsLabel: outletOptions.join(', '), rows: rows, outlets: outletOptions });
+      countries.push({ code: c.code, label: c.label, outletsLabel: outletOptions.join(', '), rows: rows, outlets: outletOptions, industries: industriesFor_(c) });
     });
     if (countries.length === 0) {
       return {
@@ -553,12 +585,15 @@ function pushData(secret, data) {
   }
   var cache = CacheService.getScriptCache();
   COUNTRIES.forEach(function (c) {
-    if (data && data.tasks && data.tasks[c.code]) {
-      cache.put('clickup_tasks_' + c.code, JSON.stringify(data.tasks[c.code]), 21600);
-    }
-    if (data && data.outlets && data.outlets[c.code]) {
-      cache.put('clickup_outlets_' + c.code, JSON.stringify(data.outlets[c.code]), 21600);
-    }
+    c.industries.forEach(function (ind) {
+      var key = c.code + '_' + ind.code;
+      if (data && data.tasks && data.tasks[c.code] && data.tasks[c.code][ind.code]) {
+        cache.put('clickup_tasks_' + key, JSON.stringify(data.tasks[c.code][ind.code]), 21600);
+      }
+      if (data && data.outlets && data.outlets[c.code] && data.outlets[c.code][ind.code]) {
+        cache.put('clickup_outlets_' + key, JSON.stringify(data.outlets[c.code][ind.code]), 21600);
+      }
+    });
   });
   FT_INDUSTRIES.forEach(function (i) {
     if (data && data.ft && data.ft.tasks && data.ft.tasks[i.code]) {
@@ -572,25 +607,38 @@ function pushData(secret, data) {
   return 'OK';
 }
 
-// Request-path read: the dashboard's onboarding rows, from the cache the Fetcher project
-// keeps warm via pushData - never a live ClickUp call. See file header comment for why.
+// Request-path read: the dashboard's onboarding rows, merged across every
+// industry List this country onboards from (see COUNTRIES above), from the
+// cache the Fetcher project keeps warm via pushData - never a live ClickUp
+// call. See file header comment for why. Each row is tagged with which
+// industry it came from (industry/industryLabel), purely for the client's
+// industry-tab UI - nothing else in this file cares which industry a row is
+// in, since PIC access is resolved by outlet name alone (see COUNTRIES note).
 function getClickUpTasks_(country) {
-  var raw = CacheService.getScriptCache().get('clickup_tasks_' + country.code);
-  if (!raw) {
+  var rows = [];
+  var anyCached = false;
+  country.industries.forEach(function (ind) {
+    var raw = CacheService.getScriptCache().get('clickup_tasks_' + country.code + '_' + ind.code);
+    if (raw === null) return;
+    anyCached = true;
+    JSON.parse(raw).forEach(function (t) {
+      rows.push({
+        id: t.id,
+        outlet: t.outlet,
+        name: t.name,
+        position: t.position,
+        status: t.status,
+        dueDate: t.dueDate ? new Date(t.dueDate) : '',
+        lastUpdated: t.lastUpdated ? new Date(t.lastUpdated) : '',
+        industry: ind.code,
+        industryLabel: ind.label
+      });
+    });
+  });
+  if (!anyCached) {
     throw new ClickUpError_('Onboarding data is still loading. Please try again in a few minutes.',
       'Cache empty for ' + country.code + ' - the Fetcher project may not have pushed yet.');
   }
-  var rows = JSON.parse(raw).map(function (t) {
-    return {
-      id: t.id,
-      outlet: t.outlet,
-      name: t.name,
-      position: t.position,
-      status: t.status,
-      dueDate: t.dueDate ? new Date(t.dueDate) : '',
-      lastUpdated: t.lastUpdated ? new Date(t.lastUpdated) : ''
-    };
-  });
   return applyPtAckLog_(rows);
 }
 
@@ -671,12 +719,24 @@ function unacknowledgeOnboarding(token, countryCode, taskId) {
   return getDashboardData(token);
 }
 
-// Each country's Outlet dropdown options come from its own ClickUp field definition
-// itself (auto-syncs as outlets are added/removed in ClickUp, no code change needed).
-// Request-path read: from cache, never a live ClickUp call - see file header comment.
+// Each country's Outlet dropdown options come from its own ClickUp field
+// definitions (auto-syncs as outlets are added/removed in ClickUp, no code
+// change needed) - merged and deduped across every industry List this country
+// onboards from. Used for the Manage Access/Outlet Categories panels' outlet
+// dropdowns, which operate at the country level regardless of industry.
+// Request-path read: from cache, never a live ClickUp call - see file header.
 function getOutletOptionsForCountry_(country) {
-  var raw = CacheService.getScriptCache().get('clickup_outlets_' + country.code);
-  return raw ? JSON.parse(raw) : [];
+  var seen = {};
+  var outlets = [];
+  country.industries.forEach(function (ind) {
+    var raw = CacheService.getScriptCache().get('clickup_outlets_' + country.code + '_' + ind.code);
+    var list = raw ? JSON.parse(raw) : [];
+    list.forEach(function (o) {
+      var key = String(o).toLowerCase();
+      if (!seen[key]) { seen[key] = true; outlets.push(o); }
+    });
+  });
+  return outlets;
 }
 
 // The distinct outlets actually present in a set of rows, sorted. Used for a scoped
@@ -1294,10 +1354,12 @@ function clientCountries_(countries) {
         lastUpdated: r.lastUpdated instanceof Date ? r.lastUpdated.toISOString() : null,
         acknowledged: r.acknowledged || null,
         canAcknowledge: !!r.canAcknowledge,
-        canUnacknowledge: !!r.canUnacknowledge
+        canUnacknowledge: !!r.canUnacknowledge,
+        industry: r.industry,
+        industryLabel: r.industryLabel
       };
     });
-    return { code: c.code, label: c.label, outletsLabel: c.outletsLabel, rows: clientRows, outlets: c.outlets };
+    return { code: c.code, label: c.label, outletsLabel: c.outletsLabel, rows: clientRows, outlets: c.outlets, industries: c.industries || [] };
   });
 }
 
@@ -1351,6 +1413,7 @@ function renderShell_(ptResult, ftAccess, ftData, email, token) {
       '</div>' +
     '</div>' +
     '<div id="ptApp" style="display:none;">' +
+      '<div id="industry-bar"></div>' +
       '<div id="filter-bar"></div>' +
       '<div id="dashboard-body"></div>' +
     '</div>' +
@@ -1368,6 +1431,7 @@ function renderShell_(ptResult, ftAccess, ftData, email, token) {
       '\nvar HAS_FT=' + (hasFt ? 'true' : 'false') + ';' +
       '\nvar COUNTRIES=' + countriesJson + ';' +
       '\nvar CURRENT=COUNTRIES.length?COUNTRIES[0].code:null;' +
+      '\nvar CURRENT_INDUSTRY=CURRENT?ptDefaultIndustry(CURRENT):null;' +
       '\nvar FT_DATA=' + ftDataJson + ';' +
       '\nvar FT_CURRENT=FT_DATA&&FT_DATA.industries.length?FT_DATA.industries[0].code:null;' +
       '\nvar LAST_SYNCED=' + JSON.stringify(getLastSynced_()) + ';' +
@@ -1477,29 +1541,50 @@ function clientEngine_() {
       'return "<div class=\\"section\\" style=\\"text-align:center;padding:32px 18px;\\"><div style=\\"font-size:15px;margin-bottom:4px;\\">Nothing\\u2019s cooking at "+who+" right now.</div><div class=\\"muted\\">No one\\u2019s onboarding there at the moment \\u2014 check back soon.</div></div>";' +
     '}' +
     'function findCountry(code){for(var i=0;i<COUNTRIES.length;i++){if(COUNTRIES[i].code===code)return COUNTRIES[i];}return COUNTRIES[0];}' +
-    'function initFilterBar(){renderFilterBar();}' +
+    'function ptDefaultIndustry(code){var c=findCountry(code);return (c&&c.industries&&c.industries.length)?c.industries[0].code:null;}' +
+    'function initFilterBar(){renderIndustryToggle();renderFilterBar();}' +
+    'function renderIndustryToggle(){' +
+      'var c=findCountry(CURRENT);var html="";' +
+      'if(c.industries&&c.industries.length>1){' +
+        'html+="<div class=\\"industry-toggle\\">"+c.industries.map(function(i){return "<button class=\\"industry-btn"+(i.code===CURRENT_INDUSTRY?" active":"")+"\\" onclick=\\"selectIndustry(\'"+i.code+"\')\\">"+esc(i.label)+"</button>";}).join("")+"</div>";' +
+      '}' +
+      'document.getElementById("industry-bar").innerHTML=html;' +
+    '}' +
+    'function selectIndustry(code){' +
+      'CURRENT_INDUSTRY=code;' +
+      'renderIndustryToggle();' +
+      'renderFilterBar();' +
+      'render("");' +
+    '}' +
     'function renderFilterBar(){' +
       'var c=findCountry(CURRENT);var html="";' +
       'if(COUNTRIES.length>1){' +
         'html+="<div class=\\"country-toggle\\">"+COUNTRIES.map(function(cc){return "<button class=\\"country-btn"+(cc.code===CURRENT?" active":"")+"\\" onclick=\\"selectCountry(\'"+cc.code+"\')\\">"+esc(cc.label)+"</button>";}).join("")+"</div>";' +
       '}' +
-      'if(c.outlets.length>1){' +
-        'var opts=c.outlets.map(function(o){return "<option value=\\""+esc(o)+"\\">"+esc(o)+"</option>";}).join("");' +
+      'var industryRows=c.rows.filter(function(r){return r.industry===CURRENT_INDUSTRY;});' +
+      'var outletSeen={};var outletOpts=[];' +
+      'industryRows.forEach(function(r){if(r.outlet&&!outletSeen[r.outlet]){outletSeen[r.outlet]=true;outletOpts.push(r.outlet);}});' +
+      'outletOpts.sort();' +
+      'if(outletOpts.length>1){' +
+        'var opts=outletOpts.map(function(o){return "<option value=\\""+esc(o)+"\\">"+esc(o)+"</option>";}).join("");' +
         'html+="<div class=\\"filter-row\\"><label for=\\"outletFilter\\" class=\\"muted\\">Filter by outlet</label><select id=\\"outletFilter\\" onchange=\\"render(this.value)\\"><option value=\\"\\">All outlets</option>"+opts+"</select></div>";' +
       '}' +
       'document.getElementById("filter-bar").innerHTML=html;' +
     '}' +
     'function selectCountry(code){' +
       'CURRENT=code;' +
+      'CURRENT_INDUSTRY=ptDefaultIndustry(CURRENT);' +
       'var c=findCountry(CURRENT);' +
       'var lbl=document.getElementById("headerLabel");' +
       'if(lbl)lbl.textContent=c.outletsLabel;' +
+      'renderIndustryToggle();' +
       'renderFilterBar();' +
       'render("");' +
     '}' +
     'function render(selected){' +
       'var c=findCountry(CURRENT);' +
-      'var rows=selected?c.rows.filter(function(r){return r.outlet===selected;}):c.rows;' +
+      'var industryRows=c.rows.filter(function(r){return r.industry===CURRENT_INDUSTRY;});' +
+      'var rows=selected?industryRows.filter(function(r){return r.outlet===selected;}):industryRows;' +
       'var el=document.getElementById("dashboard-body");' +
       'if(rows.length===0){el.innerHTML=emptyState(selected);return;}' +
       'el.innerHTML=buildStatCards(rows)+buildOutletBreakdown(rows,selected)+buildStatusBar(rows)+buildGroupedTable(rows);' +
@@ -1531,9 +1616,14 @@ function clientEngine_() {
       'var stillExists=false;' +
       'for(var i=0;i<COUNTRIES.length;i++){if(COUNTRIES[i].code===CURRENT)stillExists=true;}' +
       'if(!stillExists)CURRENT=COUNTRIES[0].code;' +
+      'var currentCountry=findCountry(CURRENT);' +
+      'var industryStillExists=false;' +
+      'if(currentCountry.industries)for(var j=0;j<currentCountry.industries.length;j++){if(currentCountry.industries[j].code===CURRENT_INDUSTRY)industryStillExists=true;}' +
+      'if(!industryStillExists)CURRENT_INDUSTRY=ptDefaultIndustry(CURRENT);' +
       'var lbl=document.getElementById("headerLabel");' +
-      'if(lbl)lbl.textContent=findCountry(CURRENT).outletsLabel;' +
+      'if(lbl)lbl.textContent=currentCountry.outletsLabel;' +
       'document.getElementById("syncLabel").textContent="Refreshes automatically every minute"+(LAST_SYNCED?(" \\u00B7 Last updated "+fmtTime(LAST_SYNCED)):"");' +
+      'renderIndustryToggle();' +
       'renderFilterBar();' +
       'render("");' +
       'var btn=document.getElementById("refreshBtn");' +
