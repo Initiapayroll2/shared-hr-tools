@@ -105,8 +105,12 @@
 // Each country's Outlet/Position/Full Name come from its own ClickUp custom fields -
 // SG's are named "Outlet"/"Role"/"Full Name", MY's are named "Assigned Outlet"/
 // "Official Part-time Position"/"Full Name (as per NRIC/ID)" - shared across every
-// industry List within that country (confirmed 2026-09-21 that the new Salon/Back
-// Office lists reuse the same field names as each country's original F&B list).
+// industry List within that country, EXCEPT the outlet field itself, which an
+// industry entry can override (confirmed 2026-09-22: MY's Back Office list calls
+// its equivalent field "Assigned Department", not "Assigned Outlet" - its values
+// are department names like "HR Department", not physical outlets). Each industry
+// entry's own outletField, when present, wins over the country's; PIC_MAPPINGS
+// matching still just treats it as another "outlet" string either way.
 // Each country onboards from more than one ClickUp List, one per industry - added
 // 2026-09-21 at the user's request for industry tabs alongside F&B. Not every
 // country has every industry (there's no SG Office list yet) - deliberately
@@ -131,7 +135,7 @@ var COUNTRIES = [
     industries: [
       { code: 'fnb', label: 'F&B', listId: '901819757280' },
       { code: 'salon', label: 'Salon', listId: '901819757285' },
-      { code: 'office', label: 'Back Office', listId: '901820013727' }
+      { code: 'office', label: 'Back Office', listId: '901820013727', outletField: 'Assigned Department' }
     ]
   }
 ];
