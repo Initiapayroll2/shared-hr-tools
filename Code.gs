@@ -1927,6 +1927,8 @@ function clientEngine_() {
       'if(popup)popup.style.display="none";' +
     '}' +
     'function buildFtTable(rows,industry){' +
+      'var showOutlet=industry.code!=="SG_officehq";' +
+      'var colCount=showOutlet?7:6;' +
       'var groups={};var order=[];' +
       'rows.forEach(function(r){var s=r.status||"";if(!groups[s]){groups[s]=[];order.push(s);}groups[s].push(r);});' +
       'var statusOrder=FT_STATUS_ORDER.concat(order.filter(function(s){return FT_STATUS_ORDER.indexOf(s)===-1;}));' +
@@ -1934,12 +1936,12 @@ function clientEngine_() {
       'statusOrder.forEach(function(status){' +
         'var members=groups[status];if(!members||members.length===0)return;' +
         'var color=FT_STATUS_COLORS[status]||DEFAULT_COLOR;' +
-        'body+="<tr class=\\"group-header\\"><td colspan=\\"7\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
+        'body+="<tr class=\\"group-header\\"><td colspan=\\""+colCount+"\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
         'members.forEach(function(r){' +
-          'body+="<tr>"+"<td>"+esc(toTitleCase(r.fullName))+"</td><td>"+ftTbc(r.position)+"</td>"+ftOutletCell(r,industry)+"<td>"+ftTbc(r.department)+"</td><td"+(r.dueDate?"":" class=\\"tbc\\"")+">"+(r.dueDate?esc(fmtDate(r.dueDate)):"TBC")+"</td><td class=\\"muted\\">"+esc(r.assignee||"Unassigned")+"</td><td class=\\"checklist\\">"+ftChecklistHtml(r)+"</td></tr>";' +
+          'body+="<tr>"+"<td>"+esc(toTitleCase(r.fullName))+"</td><td>"+ftTbc(r.position)+"</td>"+(showOutlet?ftOutletCell(r,industry):"")+"<td>"+ftTbc(r.department)+"</td><td"+(r.dueDate?"":" class=\\"tbc\\"")+">"+(r.dueDate?esc(fmtDate(r.dueDate)):"TBC")+"</td><td class=\\"muted\\">"+esc(r.assignee||"Unassigned")+"</td><td class=\\"checklist\\">"+ftChecklistHtml(r)+"</td></tr>";' +
         '});' +
       '});' +
-      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Full Name</th><th>Position</th><th>Outlet</th><th>Department</th><th>Join Date</th><th>HR In-Charge</th><th>Checklist</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
+      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Full Name</th><th>Position</th>"+(showOutlet?"<th>Outlet</th>":"")+"<th>Department</th><th>Join Date</th><th>HR In-Charge</th><th>Checklist</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
     '}' +
     'function ftEmptyState(){' +
       'return "<div class=\\"section\\" style=\\"text-align:center;padding:32px 18px;\\"><div style=\\"font-size:15px;margin-bottom:4px;\\">Nothing\\u2019s cooking here right now.</div><div class=\\"muted\\">No one\\u2019s onboarding in this industry at the moment.</div></div>";' +
