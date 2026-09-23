@@ -232,7 +232,14 @@ function doGet(e) {
       newEmail = exchangeCodeForEmail_(params.code, execUrl);
     } catch (err) {
       Logger.log('OAuth callback failed: ' + (err && err.message ? err.message : err));
-      return signInPage_(execUrl, 'Sign-in failed. Please try again.');
+      // The single most common way to land here isn't a bad account or a real
+      // failure at all - it's simply hitting browser refresh on this tab,
+      // which resends the same one-time "code" from the URL (see the file
+      // header's SIGN-IN note on why this tab's URL can't be cleaned up after
+      // sign-in). Google always rejects a reused code, so this message is
+      // deliberately worded as "please sign in again" rather than "failed",
+      // since nothing actually went wrong on the visitor's end.
+      return signInPage_(execUrl, 'Your sign-in has expired — please sign in again below.');
     }
     return renderDashboardOrError_(newEmail, signSession_(newEmail));
   }
