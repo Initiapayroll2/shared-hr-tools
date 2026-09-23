@@ -427,7 +427,7 @@ function computeDashboardCountries_(email) {
     outlets.forEach(function (o) { wanted[o] = true; });
     c.rows.forEach(function (r) {
       if (wanted[String(r.outlet || '').toLowerCase()]) {
-        r.canAcknowledge = r.status === 'ONBOARDING COMPLETE' && !r.acknowledged;
+        r.canAcknowledge = ptIsComplete_(r.status) && !r.acknowledged;
         r.canUnacknowledge = !!r.acknowledged;
       }
     });
@@ -618,6 +618,16 @@ function pushData(secret, data) {
   return 'OK';
 }
 
+// Whether a PT row's raw ClickUp status counts as "done" for acknowledgment
+// purposes - deliberately a prefix match, not an exact one: MY's real list
+// names this status "Onboarding Completed" (trailing "D"), not "Onboarding
+// Complete" like SG's, discovered 2026-09-23 when MY's Acknowledge button
+// never appeared for anyone despite 13 genuinely-completed rows. A prefix
+// match accepts either country's spelling without needing to know it up front.
+function ptIsComplete_(status) {
+  return String(status || '').toUpperCase().indexOf('ONBOARDING COMPLETE') === 0;
+}
+
 // Request-path read: the dashboard's onboarding rows, merged across every
 // industry List this country onboards from (see COUNTRIES above), from the
 // cache the Fetcher project keeps warm via pushData - never a live ClickUp
@@ -642,7 +652,9 @@ function getClickUpTasks_(country) {
         dueDate: t.dueDate ? new Date(t.dueDate) : '',
         lastUpdated: t.lastUpdated ? new Date(t.lastUpdated) : '',
         industry: ind.code,
-        industryLabel: ind.label
+        industryLabel: ind.label,
+        checklistDone: t.checklistDone || 0,
+        checklistTotal: t.checklistTotal || 0
       });
     });
   });
@@ -704,7 +716,7 @@ function requireAckRow_(email, countryCode, taskId) {
 function acknowledgeOnboarding(token, countryCode, taskId) {
   var email = requireSession_(token);
   var row = requireAckRow_(email, countryCode, taskId);
-  if (row.status !== 'ONBOARDING COMPLETE') throw new Error('Only a completed onboarding can be acknowledged.');
+  if (!ptIsComplete_(row.status)) throw new Error('Only a completed onboarding can be acknowledged.');
 
   var log = getPtAckLog_();
   log[taskId] = { by: email, at: new Date().toISOString() };
@@ -1367,7 +1379,9 @@ function clientCountries_(countries) {
         canAcknowledge: !!r.canAcknowledge,
         canUnacknowledge: !!r.canUnacknowledge,
         industry: r.industry,
-        industryLabel: r.industryLabel
+        industryLabel: r.industryLabel,
+        checklistDone: r.checklistDone || 0,
+        checklistTotal: r.checklistTotal || 0
       };
     });
     return { code: c.code, label: c.label, outletsLabel: c.outletsLabel, rows: clientRows, outlets: c.outlets, industries: c.industries || [] };
@@ -1515,6 +1529,7 @@ function clientEngine_() {
       'var legend=statuses.map(function(s){var n=counts[s]||0;if(n===0)return "";var color=STATUS_COLORS[s]||DEFAULT_COLOR;return "<div class=\\"legend-item\\"><span class=\\"legend-dot\\" style=\\"background:"+color+"\\"></span>"+esc(s)+" <span class=\\"legend-count\\">"+n+"</span></div>";}).join("");' +
       'return "<div class=\\"section\\"><div class=\\"section-title\\">By status</div><div class=\\"bar\\">"+segments+"</div><div class=\\"legend\\">"+legend+"</div></div>";' +
     '}' +
+    'function ptIsComplete(status){return String(status||"").toUpperCase().indexOf("ONBOARDING COMPLETE")===0;}' +
     'function ptAckCell(r){' +
       'if(r.acknowledged){' +
         'var badge="<span class=\\"ack-badge\\" title=\\"Acknowledged by "+esc(r.acknowledged.by)+" on "+esc(fmtDate(r.acknowledged.at))+"\\">\\u2713 Acknowledged</span>";' +
@@ -1542,10 +1557,11 @@ function clientEngine_() {
         'var color=STATUS_COLORS[status]||DEFAULT_COLOR;' +
         'body+="<tr class=\\"group-header\\"><td colspan=\\"6\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
         'members.forEach(function(r){' +
-          'body+="<tr><td>"+esc(r.outlet)+"</td><td>"+esc(toTitleCase(r.name))+"</td><td>"+esc(r.position)+"</td><td>"+esc(fmtDate(r.dueDate))+"</td><td class=\\"muted\\">"+esc(fmtDate(r.lastUpdated))+"</td>"+ptAckCell(r)+"</tr>";' +
+          'var lastCell=ptIsComplete(r.status)?ptAckCell(r):("<td class=\\"checklist\\">"+ftChecklistHtml(r)+"</td>");' +
+          'body+="<tr><td>"+esc(r.outlet)+"</td><td>"+esc(toTitleCase(r.name))+"</td><td>"+esc(r.position)+"</td><td>"+esc(fmtDate(r.dueDate))+"</td><td class=\\"muted\\">"+esc(fmtDate(r.lastUpdated))+"</td>"+lastCell+"</tr>";' +
         '});' +
       '});' +
-      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Outlet</th><th>Employee</th><th>Position</th><th>Expected Join Date</th><th>Last Updated</th><th>Onboarding</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
+      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Outlet</th><th>Employee</th><th>Position</th><th>Expected Join Date</th><th>Last Updated</th><th>PIC Acknowledgment</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
     '}' +
     'function emptyState(selected){' +
       'var who=selected?("<b>"+esc(selected)+"</b>"):"any outlet";' +
