@@ -1529,6 +1529,7 @@ function clientEngine_() {
       'var legend=statuses.map(function(s){var n=counts[s]||0;if(n===0)return "";var color=STATUS_COLORS[s]||DEFAULT_COLOR;return "<div class=\\"legend-item\\"><span class=\\"legend-dot\\" style=\\"background:"+color+"\\"></span>"+esc(s)+" <span class=\\"legend-count\\">"+n+"</span></div>";}).join("");' +
       'return "<div class=\\"section\\"><div class=\\"section-title\\">By status</div><div class=\\"bar\\">"+segments+"</div><div class=\\"legend\\">"+legend+"</div></div>";' +
     '}' +
+    'function ptIsComplete(status){return String(status||"").toUpperCase().indexOf("ONBOARDING COMPLETE")===0;}' +
     'function ptAckCell(r){' +
       'if(r.acknowledged){' +
         'var badge="<span class=\\"ack-badge\\" title=\\"Acknowledged by "+esc(r.acknowledged.by)+" on "+esc(fmtDate(r.acknowledged.at))+"\\">\\u2713 Acknowledged</span>";' +
@@ -1554,12 +1555,13 @@ function clientEngine_() {
       'statusOrder.forEach(function(status){' +
         'var members=groups[status];if(!members||members.length===0)return;' +
         'var color=STATUS_COLORS[status]||DEFAULT_COLOR;' +
-        'body+="<tr class=\\"group-header\\"><td colspan=\\"7\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
+        'body+="<tr class=\\"group-header\\"><td colspan=\\"6\\"><span class=\\"badge\\" style=\\"background:"+color+"\\">"+esc(status)+"</span> <span class=\\"muted\\">"+members.length+"</span></td></tr>";' +
         'members.forEach(function(r){' +
-          'body+="<tr><td>"+esc(r.outlet)+"</td><td>"+esc(toTitleCase(r.name))+"</td><td>"+esc(r.position)+"</td><td>"+esc(fmtDate(r.dueDate))+"</td><td class=\\"muted\\">"+esc(fmtDate(r.lastUpdated))+"</td><td class=\\"checklist\\">"+ftChecklistHtml(r)+"</td>"+ptAckCell(r)+"</tr>";' +
+          'var lastCell=ptIsComplete(r.status)?ptAckCell(r):("<td class=\\"checklist\\">"+ftChecklistHtml(r)+"</td>");' +
+          'body+="<tr><td>"+esc(r.outlet)+"</td><td>"+esc(toTitleCase(r.name))+"</td><td>"+esc(r.position)+"</td><td>"+esc(fmtDate(r.dueDate))+"</td><td class=\\"muted\\">"+esc(fmtDate(r.lastUpdated))+"</td>"+lastCell+"</tr>";' +
         '});' +
       '});' +
-      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Outlet</th><th>Employee</th><th>Position</th><th>Expected Join Date</th><th>Last Updated</th><th>Checklist</th><th>PIC Acknowledgment</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
+      'return "<div class=\\"table-wrap\\"><table><thead><tr><th>Outlet</th><th>Employee</th><th>Position</th><th>Expected Join Date</th><th>Last Updated</th><th>Checklist</th></tr></thead><tbody>"+body+"</tbody></table></div>";' +
     '}' +
     'function emptyState(selected){' +
       'var who=selected?("<b>"+esc(selected)+"</b>"):"any outlet";' +
