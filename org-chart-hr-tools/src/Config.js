@@ -128,6 +128,24 @@ var CONFIG = {
   // instead of the org chart, not just being unable to edit.
   ORG_CHART_VIEWERS_SHEET_NAME: 'Org Chart Viewers',
 
+  // "Sign in with Google" rebuild (2026-09-25, per Chris) -- Session.getActiveUser()
+  // only ever reliably identified visitors in the SAME Google Workspace domain as
+  // the deploying account (confirmed broken for a personal Gmail even while
+  // genuinely signed in), so access is now checked via a real Google Identity
+  // Services sign-in + server-side ID token verification instead (see apiSignIn
+  // in OrgChartServer.js). This Client ID is a public identifier, not a secret --
+  // safe to live in source. Created under Chris's own "Org Chart" GCP project.
+  ORG_CHART_GOOGLE_CLIENT_ID: '987506613180-81u13m98o3d6juj25dm691prp8a00th6.apps.googleusercontent.com',
+  // Hardcoded (not ScriptApp.getService().getUrl()) so the OAuth redirect_uri
+  // is always identical regardless of how a visitor reached the page --
+  // confirmed live 2026-09-25: a visitor signed into the redzgroup.com
+  // Workspace gets served from https://script.google.com/a/redzgroup.com/
+  // macros/s/.../exec (domain-prefixed), not the plain form below, which
+  // otherwise caused a redirect_uri_mismatch against the one registered
+  // Authorized redirect URI in Google Cloud Console. Update this if the
+  // deployment ID ever changes (clasp deployments shows the current one).
+  ORG_CHART_EXEC_URL: 'https://script.google.com/macros/s/AKfycbw17CniUTiGzPkZtM4-pR9PJkj3Y9L4lbDm1xWzl5vSkHRgb1iQM1cgtDeHT_ZkBvaeHg/exec',
+
   // Manual photo override for an Incoming Employees card, keyed by ClickUp
   // task id (these people have no employee id yet) -- for when the
   // auto-match-by-full-name against the Application Form sheet misses or

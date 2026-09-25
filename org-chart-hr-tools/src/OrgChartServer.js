@@ -32,7 +32,14 @@
  */
 
 var ORG_CHART_PEOPLE_HEADERS = ['Employee ID', 'Source', 'Name', 'Nickname', 'Position', 'Photo File ID', 'Role Tag', 'Company Phone', 'Company Email', 'Updated At', 'Updated By'];
-var ORG_CHART_PLACEMENTS_HEADERS = ['Employee ID', 'Outlet', 'Layer', 'Source', 'Updated At', 'Updated By'];
+// 'Scope' (added 2026-09-25, per Chris -- Joseph Chin oversees only the
+// dessert brands, not every F&B outlet) is meaningful ONLY for a Layer 1
+// placement on a LEADERSHIP_PAGES sentinel outlet: blank means "mirrors to
+// every outlet on this scheme" (the original, still-default behavior --
+// Suresh/Jim's rows stay blank), a comma-separated list of exact outlet
+// names means "mirrors ONLY to these" -- see apiGetOutletDetail's Layer 1
+// mirror filter and apiSetPlacementScope.
+var ORG_CHART_PLACEMENTS_HEADERS = ['Employee ID', 'Outlet', 'Layer', 'Source', 'Updated At', 'Updated By', 'Scope'];
 var PLACEMENT_SOURCE_AUTO = 'auto', PLACEMENT_SOURCE_MANUAL = 'manual';
 var ORG_CHART_MANUAL_PHOTOS_FOLDER_NAME = 'Org Chart - Manually Added Profiles';
 var ROLE_TAG_FOH = 'FOH', ROLE_TAG_BOH = 'BOH';
@@ -64,51 +71,224 @@ var ORG_CHART_EXCLUDED_STATUSES = {
   'INTERNSHIP ENDED': true, // an old, superseded record, same spirit as Converted to PT/FT -- per Chris 2026-09-19
 };
 
+/**
+ * doGet always serves the app shell now -- it can no longer gate access the
+ * way it did 2026-09-25 through 2026-09-25 (checking Session.getActiveUser()
+ * before deciding what to return). That approach only ever worked for
+ * visitors in the SAME Google Workspace domain as the deploying account --
+ * confirmed broken for ladawadi1997@gmail.com (a personal Gmail) even while
+ * genuinely signed in, and almost certainly also broken all along for
+ * sunny@initia.sg/mijoo@initia.sg (a different Workspace domain than
+ * redzgroup.com).
+ *
+ * Sign-in is a real OAuth 2.0 "Sign in with Google" flow using a separate
+ * OAuth client (see buildGoogleAuthUrl_/exchangeGoogleAuthCode_ below), NOT
+ * Google Identity Services' client-side button -- confirmed live 2026-09-25
+ * that approach cannot work here at all: GIS checks the page's own origin,
+ * and Apps Script HtmlService content always executes inside a sandboxed
+ * n-XXXX.script.googleusercontent.com iframe, which Google explicitly
+ * refuses to let be registered as an OAuth "Authorized JavaScript origin"
+ * ("Invalid Origin: uses a forbidden domain").
+ * A plain server-side redirect flow avoids THAT specific problem (only the
+ * stable script.google.com/.../exec URL needs registering, as an Authorized
+ * REDIRECT URI), but hits a second, different wall: that same sandboxed
+ * iframe is deliberately not granted allow-top-navigation, so a same-tab
+ * link to Google's consent screen can never actually replace the tab (any
+ * attempt either silently fails or still carries the iframe's own forbidden
+ * origin along with it). The fix -- proven already in production by the F&B
+ * PT Onboarding Portal project (apps-script-projects/fnb-onboarding-portal) --
+ * is for the sign-in link to open in a brand NEW tab (target="_blank" in
+ * OrgChart.html), which is never nested inside anything, so Google's checks
+ * pass cleanly; doGet then renders the dashboard directly in that new tab
+ * once sign-in completes, rather than trying to bounce back to the original one.
+ */
 function doGet(e) {
-  // Gated at the door, not just at each edit action -- added 2026-09-25 per
-  // Chris (PDPA: this holds employee photos and names, so it can no longer
-  // be open to "anyone with the link" the way access:"ANYONE" in
-  // appsscript.json otherwise allows). Being a Super Admin already implies
-  // Viewer-or-better, so isAuthorizedVisitor_ checks both lists.
-  if (!isAuthorizedVisitor_()) {
-    var tmpl = HtmlService.createTemplateFromFile('AccessRestricted');
-    tmpl.email = currentUserEmail_() || '(no email detected)';
-    return tmpl.evaluate()
-      .setTitle('Access restricted')
-      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  var params = (e && e.parameter) || {};
+  var tmpl = HtmlService.createTemplateFromFile('OrgChart');
+  var email = '';
+  var signInError = '';
+  if (params.code) {
+    try {
+      email = exchangeGoogleAuthCode_(params.code);
+      if (!email) signInError = 'Could not verify your Google account. Please try again.';
+    } catch (err) {
+      // The single most common way to land here isn't a real failure at all
+      // -- it's hitting browser refresh on this tab, which resends the same
+      // one-time ?code= from the URL (Apps Script's sandboxed iframe has no
+      // allow-top-navigation, so this tab's URL can never be cleaned up back
+      // to a plain link after sign-in -- see the file header's SIGN-IN note
+      // and the F&B PT Onboarding Portal's identical, proven approach).
+      // Google always rejects a reused code, so this is worded as "expired",
+      // not "failed" -- nothing actually went wrong.
+      Logger.log('OAuth callback failed: ' + (err && err.message ? err.message : err));
+      signInError = 'Your sign-in has expired -- please sign in again below.';
+    }
+  } else if (params.error) {
+    signInError = 'Sign-in was cancelled. Please try again.';
   }
-  return HtmlService.createHtmlOutputFromFile('OrgChart')
+  var isAdmin = email ? isAdminByEmail_(email) : false;
+  var isViewer = email ? isViewerByEmail_(email) : false;
+  tmpl.authorized = !!(email && (isAdmin || isViewer));
+  tmpl.sessionToken = tmpl.authorized ? mintSessionToken_(email) : '';
+  tmpl.isAdmin = isAdmin;
+  tmpl.signedInEmail = email;
+  tmpl.signInError = signInError;
+  tmpl.signInUrl = buildGoogleAuthUrl_();
+  return tmpl.evaluate()
     .setTitle('Org Chart -- Initia Group')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
+/**
+ * Identity now comes from a signed session token minted at sign-in time
+ * (see doGet above), NOT from Session.getActiveUser(), which only ever
+ * reliably identified visitors in the deploying account's own Workspace
+ * domain. CURRENT_SESSION_EMAIL_ is per-execution (each google.script.run
+ * call is its own fresh execution, so this never leaks between different
+ * visitors or requests) -- beginSession_ must be the first thing every
+ * api* function does, before any permission check that (directly or
+ * indirectly) reads currentUserEmail_().
+ */
+var CURRENT_SESSION_EMAIL_ = '';
+function beginSession_(sessionToken) {
+  CURRENT_SESSION_EMAIL_ = verifySessionToken_(sessionToken);
+}
 function currentUserEmail_() {
-  return String(Session.getActiveUser().getEmail() || '').trim().toLowerCase();
+  return CURRENT_SESSION_EMAIL_ || '';
 }
 
 /**
- * Access control -- added 2026-09-23. The web app is shared with "Anyone"
- * (not restricted to one Workspace domain, since staff use several email
- * domains) and executes as whoever deployed it for EVERY visitor, so
- * without this check anyone with the link could edit, not just view.
- * Viewing (browsing outlets, seeing photos) stays open to everyone
- * regardless -- this only gates functions that write something.
+ * Session token = a small HMAC-signed, time-limited bearer token minted by
+ * doGet once a Google OAuth code exchange has verified a real sign-in.
+ * ORG_CHART_SESSION_SECRET is generated once (first time it's needed) and
+ * stored in this project's Script Properties -- never in source -- so it
+ * survives redeploys but was never hand-configured.
  */
-function isCurrentUserAdmin_() {
-  var email = String(currentUserEmail_() || '').trim().toLowerCase();
+var ORG_CHART_SESSION_SECRET_PROPERTY = 'ORG_CHART_SESSION_SECRET';
+var ORG_CHART_SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+function getSessionSecret_() {
+  var props = PropertiesService.getScriptProperties();
+  var secret = props.getProperty(ORG_CHART_SESSION_SECRET_PROPERTY);
+  if (!secret) {
+    secret = Utilities.getUuid() + Utilities.getUuid();
+    props.setProperty(ORG_CHART_SESSION_SECRET_PROPERTY, secret);
+  }
+  return secret;
+}
+function mintSessionToken_(email) {
+  var payloadJson = JSON.stringify({ email: email, exp: Date.now() + ORG_CHART_SESSION_TTL_MS });
+  var payloadB64 = Utilities.base64EncodeWebSafe(payloadJson);
+  var sigB64 = Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(payloadB64, getSessionSecret_()));
+  return payloadB64 + '.' + sigB64;
+}
+/** Returns the verified, lowercased email, or '' if the token is missing/malformed/expired/tampered with. Never throws -- an invalid token should just mean "not signed in", same as no token at all. */
+function verifySessionToken_(token) {
+  try {
+    var parts = String(token || '').split('.');
+    if (parts.length !== 2) return '';
+    var payloadB64 = parts[0], sigB64 = parts[1];
+    var expectedSigB64 = Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(payloadB64, getSessionSecret_()));
+    if (expectedSigB64 !== sigB64) return '';
+    var payload = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(payloadB64)).getDataAsString());
+    if (!payload || !payload.email || !payload.exp || Date.now() > payload.exp) return '';
+    return String(payload.email).trim().toLowerCase();
+  } catch (e) {
+    return '';
+  }
+}
+
+/** The Client Secret paired with CONFIG.ORG_CHART_GOOGLE_CLIENT_ID -- unlike the Client ID, this one IS sensitive, so it lives only in this project's Script Properties (Apps Script editor -> Project Settings -> Script Properties), never in source. Required because the redirect-based flow's code-for-token exchange authenticates as a confidential client. */
+function getGoogleClientSecret_() {
+  var secret = PropertiesService.getScriptProperties().getProperty('ORG_CHART_GOOGLE_CLIENT_SECRET');
+  if (!secret) throw new Error('ORG_CHART_GOOGLE_CLIENT_SECRET is not set in this project\'s Script Properties -- add it from the client_secret_....json Chris downloaded from Google Cloud Console.');
+  return secret;
+}
+
+/** The link the sign-in gate points to -- a normal top-level navigation to Google's own OAuth consent screen, not a JS popup/SDK call (see doGet's comment on why). redirect_uri is this deployment's own stable /exec URL, which Google redirects back to (with ?code=...) once the visitor approves. */
+function buildGoogleAuthUrl_() {
+  var params = {
+    client_id: CONFIG.ORG_CHART_GOOGLE_CLIENT_ID,
+    redirect_uri: CONFIG.ORG_CHART_EXEC_URL,
+    response_type: 'code',
+    scope: 'openid email',
+    prompt: 'select_account',
+  };
+  var query = Object.keys(params).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('&');
+  return 'https://accounts.google.com/o/oauth2/v2/auth?' + query;
+}
+
+/**
+ * Exchanges the ?code= doGet received (after the visitor approved on
+ * Google's consent screen) for the signed-in email, via a direct server-to-
+ * server call authenticated with the Client Secret -- never trusts the code
+ * itself as proof of identity. Mirrors the F&B PT Onboarding Portal's own
+ * proven exchangeCodeForEmail_ exactly (same two-call shape: token exchange,
+ * then userinfo) rather than the tokeninfo/id_token variant this was first
+ * built with -- one less thing to have gotten subtly wrong on a first pass.
+ * Returns the verified, lowercased email, or throws with Google's own error
+ * detail if the exchange itself fails (doGet's caller decides what to show).
+ */
+function exchangeGoogleAuthCode_(code) {
+  var tokenResp = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', {
+    method: 'post',
+    payload: {
+      code: code,
+      client_id: CONFIG.ORG_CHART_GOOGLE_CLIENT_ID,
+      client_secret: getGoogleClientSecret_(),
+      redirect_uri: CONFIG.ORG_CHART_EXEC_URL,
+      grant_type: 'authorization_code',
+    },
+    muteHttpExceptions: true,
+  });
+  var tokenData;
+  try { tokenData = JSON.parse(tokenResp.getContentText()); } catch (e) { return ''; }
+  if (!tokenData.access_token) {
+    Logger.log('Google token exchange failed: ' + tokenResp.getContentText());
+    return '';
+  }
+  var userResp = UrlFetchApp.fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: { Authorization: 'Bearer ' + tokenData.access_token },
+    muteHttpExceptions: true,
+  });
+  var userData;
+  try { userData = JSON.parse(userResp.getContentText()); } catch (e) { return ''; }
+  if (!userData.email || userData.email_verified === false) return '';
+  return String(userData.email).trim().toLowerCase();
+}
+
+/**
+ * Access control -- added 2026-09-23, rebuilt 2026-09-25 around real Google
+ * sign-in (see doGet/exchangeGoogleAuthCode_ above) instead of Session.getActiveUser(). The web
+ * app is shared with "Anyone" (not restricted to one Workspace domain, since
+ * staff use several email domains) and executes as whoever deployed it for
+ * EVERY visitor, so without this check anyone with the link could edit, or
+ * even just view, employee photos/names (PDPA).
+ */
+function isAdminByEmail_(email) {
+  email = String(email || '').trim().toLowerCase();
   if (!email) return false;
   if (CONFIG.ORG_CHART_ADMIN_EMAILS.some(function (a) { return String(a).trim().toLowerCase() === email; })) return true;
   return readManagedAdminEmails_().indexOf(email) !== -1;
 }
+function isCurrentUserAdmin_() {
+  return isAdminByEmail_(currentUserEmail_());
+}
 function requireAdmin_() {
   if (isCurrentUserAdmin_()) return;
   var detected = currentUserEmail_();
-  throw new Error('Only admins can make changes to the org chart. Google identified this browser as ' +
-    (detected ? detected : 'an account whose email is hidden') +
-    '. Sign in with the exact email listed under Manage Access, or ask an admin to add this detected primary email.');
+  throw new Error('Only admins can make changes to the org chart. You\'re signed in as ' +
+    (detected ? detected : 'an account that could not be verified') +
+    '. Sign in with the exact email listed under Manage Access, or ask an admin to add this email.');
 }
-/** Read-only -- lets the client know whether to show admin-only controls (Outlet Settings, the temporary cleanup tools, etc.) at all. */
+/** Viewer-or-better -- gates every read function now that doGet itself can't (see doGet's comment above). Being neither means "please sign in with an approved email", not a silent empty result. */
+function requireVisitor_() {
+  if (isAuthorizedVisitor_()) return;
+  var detected = currentUserEmail_();
+  throw new Error('Please sign in with an approved email to view the org chart. You\'re signed in as ' +
+    (detected ? detected : 'an account that could not be verified') + '.');
+}
+/** Read-only -- lets the client know whether to show admin-only controls (Outlet Settings, the temporary cleanup tools, etc.) at all. Harmless to call with no/invalid session -- just returns false, same as any other unauthenticated visitor. */
 function apiIsCurrentUserAdmin() {
   return isCurrentUserAdmin_();
 }
@@ -168,7 +348,8 @@ function invalidateAdminsCache_() {
 }
 
 /** Admin-only. Returns the permanent (deploy-only) list and the in-app-managed list separately, so the client can show which is which. */
-function apiGetAdminList() {
+function apiGetAdminList(sessionToken) {
+  beginSession_(sessionToken);
   requireAdmin_();
   return {
     permanent: CONFIG.ORG_CHART_ADMIN_EMAILS.map(function (e) { return String(e).trim().toLowerCase(); }),
@@ -177,7 +358,8 @@ function apiGetAdminList() {
   };
 }
 
-function apiAddAdminEmail(email) {
+function apiAddAdminEmail(sessionToken, email) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var clean = String(email || '').trim().toLowerCase();
   if (!clean || clean.indexOf('@') === -1) throw new Error('That doesn\'t look like a valid email address.');
@@ -191,7 +373,8 @@ function apiAddAdminEmail(email) {
   return readManagedAdminEmails_();
 }
 
-function apiRemoveAdminEmail(email) {
+function apiRemoveAdminEmail(sessionToken, email) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var clean = String(email || '').trim().toLowerCase();
   var sheet = getAdminsSheet_();
@@ -256,17 +439,21 @@ function invalidateViewersCache_() {
   _viewerEmails = null;
   try { CacheService.getScriptCache().remove(ORG_CHART_VIEWERS_CACHE_KEY); } catch (e) { /* fine, it'll expire on its own TTL */ }
 }
-function isCurrentUserViewer_() {
-  var email = String(currentUserEmail_() || '').trim().toLowerCase();
+function isViewerByEmail_(email) {
+  email = String(email || '').trim().toLowerCase();
   if (!email) return false;
   return readViewerEmails_().indexOf(email) !== -1;
 }
-/** Admin OR Viewer -- gates doGet itself (see doGet below). Being neither means "Access restricted", not just "can't edit". */
+function isCurrentUserViewer_() {
+  return isViewerByEmail_(currentUserEmail_());
+}
+/** Admin OR Viewer -- gates every read function now (see requireVisitor_ above; doGet itself can no longer gate). Being neither means "please sign in", not just "can't edit". */
 function isAuthorizedVisitor_() {
   return isCurrentUserAdmin_() || isCurrentUserViewer_();
 }
 
-function apiAddViewerEmail(email) {
+function apiAddViewerEmail(sessionToken, email) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var clean = String(email || '').trim().toLowerCase();
   if (!clean || clean.indexOf('@') === -1) throw new Error('That doesn\'t look like a valid email address.');
@@ -278,7 +465,8 @@ function apiAddViewerEmail(email) {
   return readViewerEmails_();
 }
 
-function apiRemoveViewerEmail(email) {
+function apiRemoveViewerEmail(sessionToken, email) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var clean = String(email || '').trim().toLowerCase();
   var sheet = getViewersSheet_();
@@ -465,7 +653,9 @@ function clearEmployeesCache_() {
   cache.removeAll(keys);
 }
 
-function apiRefreshData() {
+function apiRefreshData(sessionToken) {
+  beginSession_(sessionToken);
+  requireVisitor_();
   clearEmployeesCache_();
   _mastersheetEmployeesCache = null;
   _mastersheetSnapshot = null;
@@ -702,7 +892,8 @@ function writePersonRow_(employeeId, patch) {
 }
 
 /** Sets an employee's company (work) phone/email -- the Mastersheet has no such column, so this lives entirely in the People sheet, for anyone whether Mastersheet-sourced or manual. */
-function apiSetCompanyContact(employeeId, phone, email) {
+function apiSetCompanyContact(sessionToken, employeeId, phone, email) {
+  beginSession_(sessionToken);
   requireAdmin_();
   writePersonRow_(employeeId, { companyPhone: String(phone || '').trim(), companyEmail: String(email || '').trim() });
   return true;
@@ -947,6 +1138,11 @@ function getPlacementsSheet_() {
     sheet = ss.insertSheet(CONFIG.ORG_CHART_PLACEMENTS_SHEET_NAME);
     sheet.getRange(1, 1, 1, ORG_CHART_PLACEMENTS_HEADERS.length).setValues([ORG_CHART_PLACEMENTS_HEADERS]);
     sheet.setFrozenRows(1);
+  } else if (sheet.getLastColumn() < ORG_CHART_PLACEMENTS_HEADERS.length) {
+    // One-time backfill for the 'Scope' column added 2026-09-25 -- same
+    // pattern as the 'Source' column gaining no retroactive sheet migration
+    // at @10, just a header label added once so new writes land under it.
+    sheet.getRange(1, ORG_CHART_PLACEMENTS_HEADERS.length).setValue(ORG_CHART_PLACEMENTS_HEADERS[ORG_CHART_PLACEMENTS_HEADERS.length - 1]);
   }
   return sheet;
 }
@@ -1064,14 +1260,15 @@ function readAllPlacements_() {
     if (source !== PLACEMENT_SOURCE_AUTO && source !== PLACEMENT_SOURCE_MANUAL) {
       source = layer === 3 ? PLACEMENT_SOURCE_AUTO : PLACEMENT_SOURCE_MANUAL;
     }
-    out.push({ employeeId: employeeId, outlet: String(row[1] || '').trim(), layer: layer, source: source, rowNumber: i + 2 });
+    out.push({ employeeId: employeeId, outlet: String(row[1] || '').trim(), layer: layer, source: source, scope: String(row[6] || '').trim(), rowNumber: i + 2 });
   });
   _placementsCache = out;
   setCachedPlacements_(out);
   return out;
 }
 
-function upsertPlacement_(employeeId, outlet, layer, source) {
+/** scope: pass a string to SET it explicitly (used by apiSetPlacementScope), or omit entirely to leave an existing row's scope untouched -- callers that only care about employeeId/outlet/layer/source (the vast majority) must never silently wipe someone's already-set scope just by moving/re-adding them. */
+function upsertPlacement_(employeeId, outlet, layer, source, scope) {
   var sheet = getPlacementsSheet_();
   var all = readAllPlacements_();
   var now = new Date(), user = currentUserEmail_();
@@ -1079,7 +1276,8 @@ function upsertPlacement_(employeeId, outlet, layer, source) {
   for (var i = 0; i < all.length; i++) {
     if (all[i].employeeId === employeeId && outletKey_(all[i].outlet) === outletKey_(outlet)) { existing = all[i]; break; }
   }
-  var row = [employeeId, outlet, layer, source || PLACEMENT_SOURCE_MANUAL, now, user];
+  var finalScope = scope !== undefined ? scope : (existing ? existing.scope : '');
+  var row = [employeeId, outlet, layer, source || PLACEMENT_SOURCE_MANUAL, now, user, finalScope || ''];
   if (existing) {
     sheet.getRange(existing.rowNumber, 1, 1, row.length).setValues([row]);
   } else {
@@ -1146,7 +1344,7 @@ function reconcileAutoPlacements_() {
       }
     }
     (placedOutletKeys[p.employeeId] || (placedOutletKeys[p.employeeId] = {}))[outletKey_(outlet)] = true;
-    return { employeeId: p.employeeId, outlet: outlet, layer: p.layer, source: p.source };
+    return { employeeId: p.employeeId, outlet: outlet, layer: p.layer, source: p.source, scope: p.scope };
   });
 
   var newHires = [];
@@ -1164,7 +1362,7 @@ function reconcileAutoPlacements_() {
   var sheet = getPlacementsSheet_();
   var now = new Date(), user = 'auto-sync';
   if (changed) {
-    var rewrittenRows = rebuilt.map(function (p) { return [p.employeeId, p.outlet, p.layer, p.source, now, user]; });
+    var rewrittenRows = rebuilt.map(function (p) { return [p.employeeId, p.outlet, p.layer, p.source, now, user, p.scope || '']; });
     sheet.getRange(2, 1, all.length, ORG_CHART_PLACEMENTS_HEADERS.length).clearContent();
     sheet.getRange(2, 1, rewrittenRows.length, ORG_CHART_PLACEMENTS_HEADERS.length).setValues(rewrittenRows);
   }
@@ -1197,7 +1395,7 @@ function reconcileAutoPlacements_() {
   if (newHires.length) {
     var newRows = newHires.map(function (p) {
       newHireNames.push(p.name + ' (' + p.outlet + ')');
-      return [p.employeeId, p.outlet, p.layer, p.source, now, user];
+      return [p.employeeId, p.outlet, p.layer, p.source, now, user, ''];
     });
     sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, ORG_CHART_PLACEMENTS_HEADERS.length).setValues(newRows);
   }
@@ -1227,6 +1425,11 @@ function buildSyncSummary_(reconcileResult) {
     });
   }
   return lines.length ? lines : null;
+}
+
+function placementScopeIncludesOutlet_(scopeCsv, outletName) {
+  var key = outletKey_(outletName);
+  return String(scopeCsv || '').split(',').some(function (s) { return outletKey_(s) === key; });
 }
 
 function removePlacement_(employeeId, outlet) {
@@ -1480,7 +1683,8 @@ function getAllKnownOutletNames_() {
 }
 
 /** Everything the admin settings screen needs: every known outlet, its current EFFECTIVE scheme (explicit override if set, else the auto-detected default), whether that's an override or just the heuristic default, and whether its Layer 1 is opted out of the Leadership-page mirror. */
-function apiGetOutletSettingsAdmin() {
+function apiGetOutletSettingsAdmin(sessionToken) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var settingsMap = readOutletSettingsMap_();
   return getAllKnownOutletNames_().map(function (name) {
@@ -1496,7 +1700,8 @@ function apiGetOutletSettingsAdmin() {
 }
 
 /** Sets (or clears, if scheme is blank) an outlet's explicit Role Scheme override, and its Layer1-manual opt-out. departmentsCsv is only meaningful when scheme === ROLE_SCHEME_DEPARTMENT. */
-function apiSetOutletSetting(outletName, scheme, departmentsCsv, layer1Manual) {
+function apiSetOutletSetting(sessionToken, outletName, scheme, departmentsCsv, layer1Manual) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var sheet = getOutletSettingsSheet_();
   var settingsMap = readOutletSettingsMap_();
@@ -1626,7 +1831,14 @@ function resolvePerson_(employeeId, peopleMap) {
 // after both the placements cache (@38) and the lock removal (@37) --
 // remove the _timing field and every t0/t1/... line below once the
 // remaining bottleneck is found.
-function apiGetOutletList() {
+function apiGetOutletList(sessionToken) {
+  beginSession_(sessionToken);
+  requireVisitor_();
+  return getOutletListData_();
+}
+
+/** Internal implementation, shared with apiGetLeadershipOverview's own already-authenticated call -- never call this directly from the client (it does no auth check of its own). */
+function getOutletListData_() {
   var timing = {};
   var tReconcile0 = Date.now();
   var reconcileResult = reconcileAutoPlacements_();
@@ -1787,7 +1999,8 @@ function getOrCreateIncomingPhotosFolderId_() {
  * an immediate data URL for display; re-fetched the same private way (see
  * apiGetIncomingEmployees below) on every later load, never a public link.
  */
-function apiSetIncomingEmployeePhoto(taskId, base64Data, mimeType, fileName) {
+function apiSetIncomingEmployeePhoto(sessionToken, taskId, base64Data, mimeType, fileName) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var id = String(taskId || '').trim();
   if (!id) throw new Error('Missing task id.');
@@ -1810,7 +2023,8 @@ function apiSetIncomingEmployeePhoto(taskId, base64Data, mimeType, fileName) {
 }
 
 /** Doesn't delete the Drive file itself -- same non-destructive reasoning as apiClearPhoto. Falls back to the auto name-match, if any. */
-function apiClearIncomingEmployeePhoto(taskId) {
+function apiClearIncomingEmployeePhoto(sessionToken, taskId) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var id = String(taskId || '').trim();
   var overrides = readIncomingPhotoOverrides_();
@@ -1840,7 +2054,8 @@ function fetchIncomingClickUpList_(industry, token) {
   return tasks;
 }
 
-function apiGetIncomingEmployees() {
+function apiGetIncomingEmployees(sessionToken) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var token = String(PropertiesService.getScriptProperties().getProperty('CLICKUP_TOKEN') || '').trim();
   if (!token) throw new Error('Incoming Employees is not connected yet. Add CLICKUP_TOKEN in this Apps Script project\'s Script Properties.');
@@ -1897,7 +2112,9 @@ function apiGetIncomingEmployees() {
  * all (kind=null) -- these are functional departments, not outlets with an
  * in-charge.
  */
-function apiGetLeadershipOverview(kind) {
+function apiGetLeadershipOverview(sessionToken, kind) {
+  beginSession_(sessionToken);
+  requireVisitor_();
   var config = LEADERSHIP_PAGES[kind];
   if (!config) throw new Error('Unknown leadership page: ' + kind);
   var reconcileResult = reconcileAutoPlacements_();
@@ -1905,7 +2122,7 @@ function apiGetLeadershipOverview(kind) {
 
   var canonicalNames = {};
   if (config.outletRollupScheme) {
-    apiGetOutletList().outlets.forEach(function (o) { canonicalNames[outletKey_(o.name)] = o.name; }); // apiGetOutletList returns {outlets, _timing} during the TEMPORARY timing pass -- see apiGetOutletList's own comment
+    getOutletListData_().outlets.forEach(function (o) { canonicalNames[outletKey_(o.name)] = o.name; }); // returns {outlets, _timing} during the TEMPORARY timing pass -- see getOutletListData_'s own comment
   }
   var outletSchemeCache = {};
   function schemeForOutlet(outlet) {
@@ -1948,7 +2165,14 @@ function apiGetLeadershipOverview(kind) {
       if (p.layer === 1 && config.layer1RoleTagOptions && config.layer1RoleTagOptions.length && person.roleTag && config.layer1RoleTagOptions.indexOf(person.roleTag) === -1) {
         person.roleTag = '';
       }
-      if (p.layer === 1) layer1.push(person);
+      if (p.layer === 1) {
+        // Client needs this to pre-check the right outlets in the "Set outlet
+        // scope..." picker and to show a small "Scoped to: ..." caption --
+        // blank/[] means "mirrors to every outlet on this scheme" (see
+        // apiGetOutletDetail's Layer 1 mirror filter).
+        person.scope = p.scope ? p.scope.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
+        layer1.push(person);
+      }
       else if (p.layer === 2) layer2.push(person);
       else layer3.push(person);
       return;
@@ -2008,6 +2232,10 @@ function apiGetLeadershipOverview(kind) {
     roleScheme: config.roleScheme, roleTagOptions: config.roleTagOptions, layerLabels: config.layerLabels,
     outletLeads: outletLeads, rollupGroupBy: config.rollupGroupBy,
     layer1RoleTagOptions: config.layer1RoleTagOptions || [],
+    // Lets the client know whether "Set outlet scope..." makes sense at all
+    // for this page's Layer 1 -- only true for fnb/salon, which actually
+    // mirror onto real outlets (see apiGetOutletDetail); groupops has none.
+    hasRealOutletMirror: !!config.outletRollupScheme,
     syncSummary: buildSyncSummary_(reconcileResult),
   };
 }
@@ -2018,7 +2246,9 @@ function apiGetLeadershipOverview(kind) {
  * Mastersheet employee at that location (Layer 1/2 stay empty -- Chris
  * places outlet leads/management by hand, deliberately never guessed).
  */
-function apiGetOutletDetail(outletName) {
+function apiGetOutletDetail(sessionToken, outletName) {
+  beginSession_(sessionToken);
+  requireVisitor_();
   // Used to skip reconciling here, trusting apiGetOutletList() to have just
   // done it moments earlier in the same page load -- but that assumption
   // breaks whenever this is reached WITHOUT going through the index first,
@@ -2043,7 +2273,7 @@ function apiGetOutletDetail(outletName) {
       // round trips. This only ever runs once per outlet (the very first
       // time it's opened), so a single bulk append is worth it.
       var now = new Date(), user = currentUserEmail_();
-      var rows = atLocation.map(function (e) { return [e.id, outletName, 3, PLACEMENT_SOURCE_AUTO, now, user]; });
+      var rows = atLocation.map(function (e) { return [e.id, outletName, 3, PLACEMENT_SOURCE_AUTO, now, user, '']; });
       var placementsSheet = getPlacementsSheet_();
       placementsSheet.getRange(placementsSheet.getLastRow() + 1, 1, rows.length, ORG_CHART_PLACEMENTS_HEADERS.length).setValues(rows);
       invalidatePlacementsCache_();
@@ -2118,7 +2348,13 @@ function apiGetOutletDetail(outletName) {
   if (leadershipConfig) {
     var leadershipKey = outletKey_(leadershipConfig.outletName);
     layer1 = readAllPlacements_()
-      .filter(function (p) { return outletKey_(p.outlet) === leadershipKey && p.layer === 1; })
+      // A blank scope mirrors to every outlet on this scheme (the original,
+      // still-default behavior); a non-blank scope (comma-separated real
+      // outlet names) mirrors ONLY to those -- added 2026-09-25, per Chris
+      // (Chin Chen Zhuan/"Joseph Chin" is a genuine F&B Area Manager, but
+      // only for the dessert brands, not every F&B outlet -- see
+      // placementScopeIncludesOutlet_ and apiSetPlacementScope).
+      .filter(function (p) { return outletKey_(p.outlet) === leadershipKey && p.layer === 1 && (!p.scope || placementScopeIncludesOutlet_(p.scope, outletName)); })
       .map(function (p) { return resolvePerson_(p.employeeId, peopleMap); })
       .filter(Boolean);
     layer1.sort(byName);
@@ -2154,7 +2390,9 @@ function apiGetOutletDetail(outletName) {
 // ---------------------------------------------------------------------
 
 /** Top ~25 matches by name/nickname/position across BOTH Mastersheet and already-known manual people. */
-function apiSearchPeople(query) {
+function apiSearchPeople(sessionToken, query) {
+  beginSession_(sessionToken);
+  requireVisitor_();
   var q = String(query || '').trim().toLowerCase();
   if (!q) return [];
   var results = [];
@@ -2188,7 +2426,8 @@ function apiSearchPeople(query) {
  * every already-loaded photo on the page too, the same class of slowness
  * already fixed for move/tag actions (see rerenderCurrentView()).
  */
-function apiAddPlacement(employeeId, outlet, layer, roleTag) {
+function apiAddPlacement(sessionToken, employeeId, outlet, layer, roleTag) {
+  beginSession_(sessionToken);
   requireAdmin_();
   // An explicit, deliberate placement -- never auto-relocated later, even if it's Layer 3.
   upsertPlacement_(employeeId, outlet, Number(layer), PLACEMENT_SOURCE_MANUAL);
@@ -2199,7 +2438,8 @@ function apiAddPlacement(employeeId, outlet, layer, roleTag) {
 }
 
 /** Creates a brand-new manual person (no Mastersheet row) and places them in one step. roleTag optional, same reasoning as apiAddPlacement -- returns the fully-resolved person for a local re-render, not just the new id. */
-function apiCreateManualPerson(name, nickname, position, outlet, layer, roleTag) {
+function apiCreateManualPerson(sessionToken, name, nickname, position, outlet, layer, roleTag) {
+  beginSession_(sessionToken);
   requireAdmin_();
   name = String(name || '').trim();
   if (!name) throw new Error('Name is required.');
@@ -2212,7 +2452,8 @@ function apiCreateManualPerson(name, nickname, position, outlet, layer, roleTag)
 }
 
 /** Removes someone from one outlet's chart (their Mastersheet row/People profile is untouched). */
-function apiRemovePlacement(employeeId, outlet) {
+function apiRemovePlacement(sessionToken, employeeId, outlet) {
+  beginSession_(sessionToken);
   requireAdmin_();
   return removePlacement_(employeeId, outlet);
 }
@@ -2228,7 +2469,8 @@ function apiRemovePlacement(employeeId, outlet) {
  * same manual person two or three times over instead of finding the
  * already-added one via search.
  */
-function apiDeletePerson(employeeId) {
+function apiDeletePerson(sessionToken, employeeId) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var peopleMap = readPeopleMap_();
   var person = peopleMap[employeeId];
@@ -2273,7 +2515,8 @@ function apiDeletePerson(employeeId) {
  * fixed name-based matching, next time their avatar loads. Remove this
  * function and its button once Chris confirms the cleanup ran clean.
  */
-function apiRepairWrongPfilePhotos() {
+function apiRepairWrongPfilePhotos(sessionToken) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var sheet = getPeopleSheet_();
   var lastRow = sheet.getLastRow();
@@ -2354,7 +2597,8 @@ function apiRepairWrongPfilePhotos() {
  * marker every file here carries, same technique as
  * findExistingMastersheetPhotoFileId_).
  */
-function apiCleanupDuplicateOrgChartPhotos() {
+function apiCleanupDuplicateOrgChartPhotos(sessionToken) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var peopleSheet = getPeopleSheet_();
   var lastRow = peopleSheet.getLastRow();
@@ -2494,7 +2738,8 @@ function apiCleanupDuplicateOrgChartPhotos() {
  * copied onto that row's CB cell too (reusing the same public URL -- no
  * second P-file upload, since a P/T Sub row doesn't get its own P-file).
  */
-function apiBulkImportProfessionalPhotos(items) {
+function apiBulkImportProfessionalPhotos(sessionToken, items) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var idPattern = /([A-Z]{2,4}\d{3,5})/;
   var results = [];
@@ -2647,7 +2892,8 @@ function findMastersheetPtSubSiblingRow_(fullName, nickName, excludeRowNumber) {
  * everything today already turned up about wrong-photo risk, silently
  * picking "close enough" here is not worth it.
  */
-function apiScanAndUpdateExistingPfilePhotos(names) {
+function apiScanAndUpdateExistingPfilePhotos(sessionToken, names) {
+  beginSession_(sessionToken);
   requireAdmin_();
   // Scans EVERY raw Mastersheet row, not readMastersheetEmployees_()'s
   // filtered/active-only list -- confirmed live 2026-09-22: "De Asis Zyra
@@ -2745,7 +2991,8 @@ function apiScanAndUpdateExistingPfilePhotos(names) {
   return results;
 }
 
-function apiFindDuplicateManualProfiles() {
+function apiFindDuplicateManualProfiles(sessionToken) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var sheet = getPeopleSheet_();
   var lastRow = sheet.getLastRow();
@@ -2795,16 +3042,41 @@ function apiFindDuplicateManualProfiles() {
 }
 
 /** Moves someone to a different layer on the SAME outlet (e.g. promoting a Layer 3 person to Layer 2) -- a deliberate move, so it locks in as 'manual' and stops following the Mastersheet's LOCATION even if it's still Layer 3. */
-function apiMoveLayer(employeeId, outlet, newLayer) {
+function apiMoveLayer(sessionToken, employeeId, outlet, newLayer) {
+  beginSession_(sessionToken);
   requireAdmin_();
   upsertPlacement_(employeeId, outlet, Number(newLayer), PLACEMENT_SOURCE_MANUAL);
   return true;
 }
 
 /** Manual FOH/BOH/Other override, for anyone classifyRoleTag_() couldn't confidently sort. */
-function apiSetRoleTag(employeeId, roleTag) {
+function apiSetRoleTag(sessionToken, employeeId, roleTag) {
+  beginSession_(sessionToken);
   requireAdmin_();
   writePersonRow_(employeeId, { roleTag: roleTag });
+  return true;
+}
+
+/**
+ * Sets (or clears, with an empty list) which specific real outlets a
+ * Leadership Layer 1 person's placement mirrors to -- see the 'Scope'
+ * column comment on ORG_CHART_PLACEMENTS_HEADERS and apiGetOutletDetail's
+ * mirror filter. Only ever edits an EXISTING Layer 1 placement on a
+ * leadership sentinel outlet -- throws if none exists, since this is meant
+ * for scoping someone already placed there (via the Leadership page's own
+ * Add Employee), never for creating a new placement out of nowhere.
+ */
+function apiSetPlacementScope(sessionToken, employeeId, leadershipOutlet, scopeOutlets) {
+  beginSession_(sessionToken);
+  requireAdmin_();
+  var all = readAllPlacements_();
+  var existing = null;
+  for (var i = 0; i < all.length; i++) {
+    if (all[i].employeeId === employeeId && outletKey_(all[i].outlet) === outletKey_(leadershipOutlet) && all[i].layer === 1) { existing = all[i]; break; }
+  }
+  if (!existing) throw new Error('No Layer 1 placement found for this person on this leadership page.');
+  var scopeCsv = (scopeOutlets || []).map(function (s) { return String(s || '').trim(); }).filter(Boolean).join(',');
+  upsertPlacement_(employeeId, existing.outlet, existing.layer, existing.source, scopeCsv);
   return true;
 }
 
@@ -3031,7 +3303,9 @@ function bulkFindPfilePhotoFileIds_(items, folderMap, timingOut) {
   return result;
 }
 
-function apiGetPhotoDataUrl(employeeId, peopleMapOpt) {
+function apiGetPhotoDataUrl(sessionToken, employeeId, peopleMapOpt) {
+  beginSession_(sessionToken);
+  requireVisitor_();
   var peopleMap = peopleMapOpt || readPeopleMap_();
   var override = peopleMap[employeeId];
   var photoFileId = override ? override.photoFileId : '';
@@ -3442,7 +3716,9 @@ function bulkFetchAvatarDataUrls_(fileIds, timing) {
 }
 
 /** TEMPORARY server-side timing breakdown -- see the _timing field on the return value. Remove once perf is confirmed good. */
-function apiGetPhotoDataUrls(employeeIds) {
+function apiGetPhotoDataUrls(sessionToken, employeeIds) {
+  beginSession_(sessionToken);
+  requireVisitor_();
   var timing = {};
   var tStart = Date.now();
   var peopleMap = readPeopleMap_();
@@ -3528,7 +3804,8 @@ function apiGetPhotoDataUrls(employeeIds) {
 }
 
 /** Uploads a manually-supplied photo (base64 from an <input type=file>) for ANY person, Mastersheet-sourced or manual. */
-function apiUploadPhoto(employeeId, base64Data, mimeType) {
+function apiUploadPhoto(sessionToken, employeeId, base64Data, mimeType) {
+  beginSession_(sessionToken);
   requireAdmin_();
   var peopleMap = readPeopleMap_();
   var override = peopleMap[employeeId];
@@ -3565,7 +3842,8 @@ function apiUploadPhoto(employeeId, base64Data, mimeType) {
  * elsewhere) -- just clears the People-sheet override. Safe to use on
  * anyone, whatever the photo's original source.
  */
-function apiClearPhoto(employeeId) {
+function apiClearPhoto(sessionToken, employeeId) {
+  beginSession_(sessionToken);
   requireAdmin_();
   writePersonRow_(employeeId, { photoFileId: '' });
   return true;

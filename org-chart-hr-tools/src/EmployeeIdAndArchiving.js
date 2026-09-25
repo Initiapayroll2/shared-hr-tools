@@ -20,9 +20,61 @@ const MOVE_STATUSES = [
   "WITHDRAW",
   "TRANSFERRED ENTITY",
   "NOT IN USE",
-  "INACTIVE"
+  "INACTIVE",
+  // A PT<->FT conversion reuses the "[Resign] Last working day/ Transfer
+  // date" column as an effective-date field (confirmed with Chris,
+  // 2026-09-25) -- so the same 60-day-old-or-missing rule that applies to
+  // an actual resignation applies here too, once the conversion's own
+  // effective date is old enough.
+  "CONVERTED TO FT",
+  "CONVERTED TO PT"
 ];
 /**********************************/
+
+/**
+ * Removes the Mastersheet's basic Filter (Data > Create a filter), if any,
+ * before a bulk deleteRow() pass, and returns a function that recreates it
+ * afterward with the same per-column criteria -- same technique as
+ * extendMastersheetFilterToRow_() in MastersheetSync.js (that one grows
+ * the filter for an insert; this one is the delete-side counterpart).
+ * Confirmed live (2026-09-25): with an active Filter in place,
+ * Sheet.deleteRow() on a row inside the filter's range runs without
+ * throwing but silently does not shrink the sheet -- master.getLastRow()
+ * stayed byte-for-byte identical even after SpreadsheetApp.flush(), which
+ * is what was making Move Resignees copy the same rows into the archive
+ * on every run without ever actually removing them from master. Not
+ * atomic: if this throws between filter.remove() and the caller's
+ * deletions, the sheet is left with no filter rather than a stale one --
+ * acceptable since restoring the filter is a best-effort cosmetic step,
+ * never something the move's success depends on.
+ */
+function withMastersheetFilterSuspendedForDelete_(sheet) {
+  const filter = sheet.getFilter();
+  if (!filter) return () => {};
+
+  const range = filter.getRange();
+  const firstRow = range.getRow();
+  const firstCol = range.getColumn();
+  const numCols = range.getNumColumns();
+
+  const criteriaByColumn = {};
+  for (let col = firstCol; col < firstCol + numCols; col++) {
+    const criteria = filter.getColumnFilterCriteria(col);
+    if (criteria) criteriaByColumn[col] = criteria;
+  }
+
+  filter.remove();
+
+  return function restoreMastersheetFilter_() {
+    const newLastRow = Math.max(firstRow, sheet.getLastRow());
+    const numRows = newLastRow - firstRow + 1;
+    const newRange = sheet.getRange(firstRow, firstCol, numRows, numCols);
+    const newFilter = newRange.createFilter();
+    Object.keys(criteriaByColumn).forEach((col) => {
+      newFilter.setColumnFilterCriteria(parseInt(col, 10), criteriaByColumn[col]);
+    });
+  };
+}
 
 function moveResignees_60days_headerBased_toExternalArchive() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -49,6 +101,9 @@ function moveResignees_60days_headerBased_toExternalArchive() {
   const headerNorm = headerRowValues.map(norm);
   const statusColIndex = headerNorm.indexOf(norm(STATUS_HEADER)); // 0-based
   const lwdColIndex = headerNorm.indexOf(norm(LWD_HEADER));       // 0-based
+  // -1 if the column isn't there (older archive layouts) -- handled as a
+  // no-op below, never blocks the move itself.
+  const photoColIndex = headerNorm.indexOf(norm(MASTERSHEET_EMPLOYEE_PHOTO_HEADER));
 
   if (statusColIndex === -1 || lwdColIndex === -1) {
     ui.alert(
@@ -90,6 +145,29 @@ function moveResignees_60days_headerBased_toExternalArchive() {
   let movedMissing = 0;
   let movedOld = 0;
 
+  // Blanks the embedded Employee's Photo, if any, out of `rowCopy` in
+  // place, so it isn't carried into the raw setValues() write to the
+  // archive spreadsheet below -- Sheets throws "Service error:
+  // Spreadsheets" when a CellImage value crosses into a different
+  // spreadsheet file that way (confirmed live, 2026-09-25; this is what
+  // started breaking Move Resignees once resigned rows actually had a
+  // photo in them, from the sync feature). Unconditional, not just for
+  // rows that look like they hold an image: a value read back from a
+  // cell that already has an embedded image has no getBlob()/
+  // getContentType() (confirmed live -- Apps Script only lets you WRITE
+  // an image value via setValue(), never introspect one you've read
+  // back), so it can't be told apart from a normal value reliably, and
+  // it can't be rebuilt in the archive from its own bytes either. The
+  // original photo file itself is not lost -- it's still sitting in the
+  // employee's own P-file "04. PERSONAL INFORMATION" folder in Drive;
+  // it just won't show as a thumbnail in the archive sheet.
+  function blankPhotoForArchive_(rowCopy) {
+    if (photoColIndex === -1) return;
+    if (rowCopy[photoColIndex] && typeof rowCopy[photoColIndex] === "object") {
+      rowCopy[photoColIndex] = "";
+    }
+  }
+
   data.forEach((row, idx) => {
     const sheetRowNumber = HEADER_ROW + 1 + idx; // actual row number in sheet
 
@@ -105,14 +183,18 @@ function moveResignees_60days_headerBased_toExternalArchive() {
 
     // Condition: move if LWD missing OR LWD <= cutoff (>=60 days ago)
     if (isMissingLwd) {
-      rowsToMove.push([...row, "Missing Last Working Day"]);
+      const rowCopy = row.slice();
+      blankPhotoForArchive_(rowCopy);
+      rowsToMove.push([...rowCopy, "Missing Last Working Day"]);
       rowsToDelete.push(sheetRowNumber);
       movedMissing++;
       return;
     }
 
     if (lwd instanceof Date && lwd <= cutoff) {
-      rowsToMove.push([...row, `Last Working Day >= ${DAYS_TO_KEEP} days ago`]);
+      const rowCopy = row.slice();
+      blankPhotoForArchive_(rowCopy);
+      rowsToMove.push([...rowCopy, `Last Working Day >= ${DAYS_TO_KEEP} days ago`]);
       rowsToDelete.push(sheetRowNumber);
       movedOld++;
       return;
@@ -160,7 +242,14 @@ const targetRange = archive.getRange(startRow, 1, normalized.length, writeCols);
   targetRange.setValues(normalized);
 
   // --- Delete from master (bottom-up so row numbers don’t shift) ---
+  // The active Filter has to come off first -- see
+  // withMastersheetFilterSuspendedForDelete_() above for why (confirmed
+  // live, 2026-09-25: deleteRow() was silently not shrinking the sheet
+  // while the Filter covered the target rows).
+  const restoreMastersheetFilter_ = withMastersheetFilterSuspendedForDelete_(master);
   rowsToDelete.sort((a, b) => b - a).forEach(r => master.deleteRow(r));
+  SpreadsheetApp.flush();
+  restoreMastersheetFilter_();
 
   const remaining = master.getLastRow() - HEADER_ROW;
 

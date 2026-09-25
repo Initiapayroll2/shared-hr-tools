@@ -64,6 +64,16 @@ body{ margin:0; background:var(--bg); color:var(--ink); font-family:var(--font-b
 .loading{ text-align:center; color:var(--ink-faint); padding:60px 0; font-size:0.9rem; }
 .empty{ text-align:center; padding:48px 20px; color:var(--ink-soft); border:1px dashed var(--line); border-radius:14px; background:var(--surface); }
 
+.signin-gate{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+.signin-card{ max-width:420px; width:100%; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:32px; text-align:center; box-shadow:var(--shadow); }
+.signin-card h1{ font-family:var(--font-display); font-size:1.3rem; margin:0 0 10px; }
+.signin-card p{ color:var(--ink-soft); font-size:0.88rem; line-height:1.6; margin:0 0 18px; }
+.signin-card p:last-child{ margin-bottom:0; }
+.signin-card b{ color:var(--ink); }
+.signin-card .btn{ width:100%; justify-content:center; }
+.signin-note{ font-size:0.78rem !important; }
+.signin-hint{ font-size:0.75rem; color:var(--ink-faint); margin:10px 0 0 !important; }
+
 /* outlet index */
 .outlet-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(200px,1fr)); gap:14px; }
 .outlet-tile{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:var(--shadow); cursor:pointer; text-align:left; font-family:inherit; }
@@ -155,6 +165,10 @@ body{ margin:0; background:var(--bg); color:var(--ink); font-family:var(--font-b
 .field label{ font:600 0.68rem var(--font-body); text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-soft); }
 .field input, .field select{ border:1px solid var(--line); background:var(--surface-2); color:var(--ink); border-radius:8px; padding:9px 10px; font:500 0.875rem var(--font-body); width:100%; }
 .modal-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+.scope-list{ max-height:280px; overflow-y:auto; border:1px solid var(--line); border-radius:9px; padding:6px 4px; }
+.scope-row{ display:flex; align-items:center; gap:8px; padding:6px 8px; font-size:0.85rem; cursor:pointer; border-radius:6px; }
+.scope-row:hover{ background:var(--surface-2); }
+.scope-hint{ font-size:0.7rem; color:var(--ink-faint); margin-top:4px !important; }
 .search-results{ max-height:260px; overflow-y:auto; border:1px solid var(--line); border-radius:9px; margin-top:6px; }
 .search-result{ padding:9px 10px; cursor:pointer; border-bottom:1px solid var(--line); }
 .search-result:last-child{ border-bottom:none; }
@@ -177,7 +191,24 @@ body{ margin:0; background:var(--bg); color:var(--ink); font-family:var(--font-b
 </style>
 </head>
 <body>
-<div class="wrap" id="wrap">
+<div class="signin-gate" id="signin-gate">
+  <div class="signin-card">
+    <? if (signedInEmail && !authorized) { ?>
+      <h1>Access restricted</h1>
+      <p>Ask an admin to add <b><?= signedInEmail ?></b> under Manage Access.</p>
+      <a class="btn btn-ghost" href="<?= signInUrl ?>" target="_blank">Try a different account</a>
+      <p class="signin-hint">Opens in a new tab</p>
+    <? } else { ?>
+      <h1>Org Chart</h1>
+      <p>Sign in with your Google account to continue.</p>
+      <? if (signInError) { ?><p class="signin-note">Please sign in again below.</p><? } ?>
+      <a class="btn btn-primary" href="<?= signInUrl ?>" target="_blank">Sign in with Google</a>
+      <p class="signin-hint">Opens in a new tab</p>
+    <? } ?>
+  </div>
+</div>
+
+<div class="wrap" id="wrap" hidden>
   <div class="loading" id="boot-loading">Loading...</div>
 </div>
 
@@ -204,14 +235,37 @@ body{ margin:0; background:var(--bg); color:var(--ink); font-family:var(--font-b
 
 <script>
 
-var state = { view: 'index', outlets: [], currentOutlet: null, detail: null, menuOpenId: null, isAdmin: false };
+var state = { view: 'index', outlets: [], currentOutlet: null, detail: null, menuOpenId: null, isAdmin: <?!= isAdmin ? 'true' : 'false' ?> };
 
-/** Fetched once on boot, in parallel with the outlet list -- defaults to false (hides admin-only controls) until it resolves. Non-admins can still browse everything; server-side requireAdmin_() is the real enforcement, this is just so non-admins aren't shown controls they can't use. */
-function checkAdminStatus(){
-  google.script.run.withSuccessHandler(function(isAdmin){
-    state.isAdmin = !!isAdmin;
-    if(state.view === 'index') renderIndex();
-  }).withFailureHandler(function(){ /* stay non-admin on error -- safe default */ }).apiIsCurrentUserAdmin();
+/**
+ * "Sign in with Google" -- rebuilt 2026-09-25, per Chris, THREE times over.
+ * Attempt 1 (Google Identity Services' client-side button): this page always
+ * executes inside a sandboxed n-XXXX.script.googleusercontent.com iframe
+ * (never script.google.com itself), and Google outright refuses to let that
+ * shared domain be registered as an OAuth "Authorized JavaScript origin"
+ * ("Invalid Origin: uses a forbidden domain" -- confirmed live).
+ * Attempt 2 (a same-tab OAuth redirect): avoids THAT problem, but hits a
+ * second wall -- that same sandboxed iframe is deliberately not granted
+ * allow-top-navigation, so a same-tab link to Google's consent screen can
+ * never actually replace the tab ("Error 400: origin_mismatch" -- confirmed
+ * live, the browser still reports the iframe's own forbidden origin).
+ * Fixed by opening the sign-in link in a brand NEW tab (target="_blank"
+ * below) instead -- a fresh tab isn't nested inside anything, so Google's
+ * checks pass cleanly. This exact fix is already proven in production by
+ * the F&B PT Onboarding Portal project (apps-script-projects/fnb-onboarding-portal) --
+ * see its Code.gs file header for the same diagnosis in more detail.
+ * doGet already resolved sign-in server-side before this page was even
+ * rendered (see the scriptlets below), so there's no client-side callback
+ * to wire up here -- the new tab lands on doGet directly, with the code
+ * already in its URL. Every google.script.run...apiXxx(...) call in this
+ * file sends SESSION_TOKEN as its FIRST argument -- the server verifies it
+ * fresh on every single call (see beginSession_/verifySessionToken_
+ * server-side), there's no ambient "logged in" state on the server at all.
+ */
+var SESSION_TOKEN = <?!= JSON.stringify(sessionToken) ?>;
+if (<?!= authorized ? 'true' : 'false' ?>) {
+  document.getElementById('signin-gate').hidden = true;
+  document.getElementById('wrap').hidden = false;
 }
 
 function escapeHtml(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -289,7 +343,7 @@ function goIndex(){
     state.outlets = (result && result.outlets) || result;
     renderIndex();
     if(result && result.syncSummary) showSyncBanner(result.syncSummary);
-  }).withFailureHandler(function(err){ showBoot('Could not load outlets: ' + (err && err.message ? err.message : err)); }).apiGetOutletList();
+  }).withFailureHandler(function(err){ showBoot('Could not load outlets: ' + (err && err.message ? err.message : err)); }).apiGetOutletList(SESSION_TOKEN);
   showBoot('Loading outlets...');
 }
 
@@ -303,7 +357,7 @@ function goOutlet(name){
     state.detail = detail;
     renderOutlet();
     if(detail && detail.syncSummary) showSyncBanner(detail.syncSummary);
-  }).withFailureHandler(function(err){ showBoot('Could not load ' + name + ': ' + (err && err.message ? err.message : err)); }).apiGetOutletDetail(name);
+  }).withFailureHandler(function(err){ showBoot('Could not load ' + name + ': ' + (err && err.message ? err.message : err)); }).apiGetOutletDetail(SESSION_TOKEN, name);
 }
 
 /** One of the three cross-outlet leadership pages ('fnb'/'salon'/'groupops') -- not a real outlet, each stored against its own reserved sentinel name (see LEADERSHIP_PAGES server-side) so Add/Move/Remove/photo all reuse the exact same machinery as a normal outlet. */
@@ -316,7 +370,7 @@ function goLeadership(kind){
     state.currentOutlet = detail.outlet;
     renderLeadership();
     if(detail && detail.syncSummary) showSyncBanner(detail.syncSummary);
-  }).withFailureHandler(function(err){ showBoot('Could not load: ' + (err && err.message ? err.message : err)); }).apiGetLeadershipOverview(kind);
+  }).withFailureHandler(function(err){ showBoot('Could not load: ' + (err && err.message ? err.message : err)); }).apiGetLeadershipOverview(SESSION_TOKEN, kind);
 }
 
 function goIncomingEmployees(){
@@ -330,7 +384,7 @@ function goIncomingEmployees(){
       '<div class="outlet-head"><button class="btn btn-ghost" id="btn-back">&larr; All outlets</button><h1>Incoming Employees</h1></div>' +
       '<div class="empty"><b>Could not load incoming employees</b><br>' + escapeHtml(err && err.message ? err.message : err) + '</div>';
     document.getElementById('btn-back').onclick = goIndex;
-  }).apiGetIncomingEmployees();
+  }).apiGetIncomingEmployees(SESSION_TOKEN);
 }
 
 function renderIncomingEmployees(){
@@ -402,7 +456,7 @@ function wireIncomingCardMenus_(){
           goIncomingEmployees();
         }).withFailureHandler(function(err){
           alert('Could not clear photo: ' + (err && err.message ? err.message : err));
-        }).apiClearIncomingEmployeePhoto(id);
+        }).apiClearIncomingEmployeePhoto(SESSION_TOKEN, id);
       };
     };
   });
@@ -427,7 +481,7 @@ function openIncomingPhotoPicker_(taskId){
         goIncomingEmployees();
       }).withFailureHandler(function(err){
         alert('Could not upload photo: ' + (err && err.message ? err.message : err));
-      }).apiSetIncomingEmployeePhoto(taskId, reader.result.split(',')[1], file.type, file.name);
+      }).apiSetIncomingEmployeePhoto(SESSION_TOKEN, taskId, reader.result.split(',')[1], file.type, file.name);
     };
     reader.readAsDataURL(file);
   };
@@ -446,7 +500,7 @@ function goOutletSettings(){
   google.script.run.withSuccessHandler(function(rows){
     state.outletSettings = rows;
     renderOutletSettings();
-  }).withFailureHandler(function(err){ showBoot('Could not load outlet settings: ' + (err && err.message ? err.message : err)); }).apiGetOutletSettingsAdmin();
+  }).withFailureHandler(function(err){ showBoot('Could not load outlet settings: ' + (err && err.message ? err.message : err)); }).apiGetOutletSettingsAdmin(SESSION_TOKEN);
 }
 
 function renderOutletSettings(){
@@ -497,7 +551,7 @@ function renderOutletSettings(){
         o.layer1Manual = layer1El.checked;
       }).withFailureHandler(function(err){
         statusEl.textContent = 'Failed: ' + (err && err.message ? err.message : err);
-      }).apiSetOutletSetting(o.name, schemeEl.value, deptEl.value, layer1El.checked);
+      }).apiSetOutletSetting(SESSION_TOKEN, o.name, schemeEl.value, deptEl.value, layer1El.checked);
     };
   });
 }
@@ -513,7 +567,7 @@ function goManageAccess(){
   google.script.run.withSuccessHandler(function(res){
     state.adminList = res;
     renderManageAccess();
-  }).withFailureHandler(function(err){ showBoot('Could not load access list: ' + (err && err.message ? err.message : err)); }).apiGetAdminList();
+  }).withFailureHandler(function(err){ showBoot('Could not load access list: ' + (err && err.message ? err.message : err)); }).apiGetAdminList(SESSION_TOKEN);
 }
 
 /**
@@ -569,7 +623,7 @@ function renderManageAccess(){
       renderManageAccess();
     }).withFailureHandler(function(err){
       statusEl.textContent = 'Failed: ' + (err && err.message ? err.message : err);
-    }).apiAddAdminEmail(email);
+    }).apiAddAdminEmail(SESSION_TOKEN, email);
   };
   document.querySelectorAll('[data-remove-admin]').forEach(function(btn){
     btn.onclick = function(){
@@ -580,7 +634,7 @@ function renderManageAccess(){
         renderManageAccess();
       }).withFailureHandler(function(err){
         alert('Could not remove: ' + (err && err.message ? err.message : err));
-      }).apiRemoveAdminEmail(email);
+      }).apiRemoveAdminEmail(SESSION_TOKEN, email);
     };
   });
   document.getElementById('btn-add-viewer').onclick = function(){
@@ -595,7 +649,7 @@ function renderManageAccess(){
       renderManageAccess();
     }).withFailureHandler(function(err){
       statusEl.textContent = 'Failed: ' + (err && err.message ? err.message : err);
-    }).apiAddViewerEmail(email);
+    }).apiAddViewerEmail(SESSION_TOKEN, email);
   };
   document.querySelectorAll('[data-remove-viewer]').forEach(function(btn){
     btn.onclick = function(){
@@ -606,7 +660,7 @@ function renderManageAccess(){
         renderManageAccess();
       }).withFailureHandler(function(err){
         alert('Could not remove: ' + (err && err.message ? err.message : err));
-      }).apiRemoveViewerEmail(email);
+      }).apiRemoveViewerEmail(SESSION_TOKEN, email);
     };
   });
 }
@@ -691,7 +745,7 @@ function hardRefresh(){
   showBoot('Refreshing from the Mastersheet...');
   google.script.run.withSuccessHandler(function(){
     reloadCurrentView();
-  }).withFailureHandler(function(err){ showBoot('Could not refresh: ' + (err && err.message ? err.message : err)); }).apiRefreshData();
+  }).withFailureHandler(function(err){ showBoot('Could not refresh: ' + (err && err.message ? err.message : err)); }).apiRefreshData(SESSION_TOKEN);
 }
 
 // --- index view ---
@@ -781,7 +835,7 @@ function wireAdminToolButtons(){
     }).withFailureHandler(function(err){
       btn.disabled = false; btn.textContent = '\u{1F527} Repair wrong photos';
       alert('Could not repair: ' + (err && err.message ? err.message : err));
-    }).apiRepairWrongPfilePhotos();
+    }).apiRepairWrongPfilePhotos(SESSION_TOKEN);
   };
   document.getElementById('btn-cleanup-dupes').onclick = function(){
     if(!confirm('Scan every P-file (and the shared manual-photos folder) for duplicate "Org Chart Photo" files and trash the extras?\n\nEach person\'s CURRENTLY-USED photo is never touched -- only leftover duplicates. Trashed files go to Drive Trash, not permanently deleted, so this is recoverable.')) return;
@@ -793,7 +847,7 @@ function wireAdminToolButtons(){
     }).withFailureHandler(function(err){
       btn.disabled = false; btn.textContent = '\u{1F5D1}️ Clean up duplicate photos';
       alert('Could not clean up: ' + (err && err.message ? err.message : err));
-    }).apiCleanupDuplicateOrgChartPhotos();
+    }).apiCleanupDuplicateOrgChartPhotos(SESSION_TOKEN);
   };
   document.getElementById('btn-bulk-import-photos').onclick = openBulkImportPhotosModal;
   document.getElementById('btn-scan-pfile-photos').onclick = openScanPfilePhotosModal;
@@ -809,7 +863,7 @@ function goDuplicates(){
   google.script.run.withSuccessHandler(function(groups){
     state.duplicateGroups = groups;
     renderDuplicates();
-  }).withFailureHandler(function(err){ showBoot('Could not scan: ' + (err && err.message ? err.message : err)); }).apiFindDuplicateManualProfiles();
+  }).withFailureHandler(function(err){ showBoot('Could not scan: ' + (err && err.message ? err.message : err)); }).apiFindDuplicateManualProfiles(SESSION_TOKEN);
 }
 
 function renderDuplicates(){
@@ -845,7 +899,7 @@ function renderDuplicates(){
       }).withFailureHandler(function(err){
         btn.disabled = false; btn.textContent = 'Delete this one';
         alert('Could not delete: ' + (err && err.message ? err.message : err));
-      }).apiDeletePerson(id);
+      }).apiDeletePerson(SESSION_TOKEN, id);
     };
   });
 
@@ -859,7 +913,7 @@ function renderDuplicates(){
         if(!res || !res.dataUrl) return;
         document.querySelectorAll('[data-avatar-for="' + id + '"]').forEach(function(el){ setAvatarImg(el, res.dataUrl); });
       });
-    }).apiGetPhotoDataUrls(ids);
+    }).apiGetPhotoDataUrls(SESSION_TOKEN, ids);
   }
 }
 
@@ -1026,6 +1080,7 @@ function renderGridCard(p, layerNum){
     (p.nickname ? '<span class="gnick">“' + escapeHtml(p.nickname) + '”</span>' : '') +
     '<div class="gpos">' + escapeHtml(p.position) + '</div>' +
     (layerNum === 2 && p.roleTag ? '<div class="grole">' + escapeHtml(p.roleTag) + '</div>' : '') +
+    (p.scope && p.scope.length ? '<div class="grole">Scoped: ' + escapeHtml(p.scope.join(', ')) + '</div>' : '') +
     (p.source === 'manual' ? '<div class="gsource">Manually added</div>' : '') +
     (resigned ? '<span class="badge">Resigned</span>' : '') +
     (p.resigningSoon && p.lastWorkingDay ? '<div class="lwd-note">Last day ' + escapeHtml(p.lastWorkingDay) + '</div>' : '') +
@@ -1076,14 +1131,22 @@ function wireCardActions(){
       // is as far as this app can ever go for them.
       var deleteItem = (!isDerivedLayer1 && p.source === 'manual') ? '<button data-act="delete" class="danger">Delete this person</button>' : '';
       var removeItem = isDerivedLayer1 ? '' : ('<div class="menu-label"></div><button data-act="remove" class="danger">Remove from this outlet</button>');
+      // Only makes sense on a Leadership page's own Layer 1 (never a normal
+      // outlet's, which is either a read-only mirror or a fully-manual,
+      // single-outlet placement with nothing to scope) -- see
+      // apiSetPlacementScope/hasRealOutletMirror.
+      var scopeItem = (state.view === 'leadership' && layer === 1 && state.detail.hasRealOutletMirror) ? '<button data-act="scope">Set outlet scope...</button>' : '';
       // "Clear photo" only when there's actually one showing -- covers a
       // photo turning out to be flat-out wrong (e.g. someone else's face),
       // not just wanting to replace it with a better one.
       var clearPhotoItem = p.hasPhoto ? '<button data-act="clearphoto">Clear photo</button>' : '';
       var menu = document.createElement('div'); menu.className = 'menu';
-      menu.innerHTML = '<button data-act="photo">Upload photo</button>' + clearPhotoItem + (moveItems ? '<div class="menu-label">Move</div>' + moveItems : '') + roleItems + removeItem + deleteItem;
+      menu.innerHTML = '<button data-act="photo">Upload photo</button>' + clearPhotoItem + (moveItems ? '<div class="menu-label">Move</div>' + moveItems : '') + roleItems + scopeItem + removeItem + deleteItem;
       btn.parentElement.appendChild(menu);
       menu.querySelector('[data-act="photo"]').onclick = function(){ closePopovers(); openPhotoModal(p); };
+      if(scopeItem){
+        menu.querySelector('[data-act="scope"]').onclick = function(){ closePopovers(); openScopeModal(p); };
+      }
       if(clearPhotoItem){
         menu.querySelector('[data-act="clearphoto"]').onclick = function(){
           closePopovers();
@@ -1093,7 +1156,7 @@ function wireCardActions(){
             document.querySelectorAll('[data-avatar-for="' + id + '"]').forEach(function(el){ el.innerHTML = initials(p.name); });
           }).withFailureHandler(function(err){
             alert('Could not clear photo: ' + (err && err.message ? err.message : err));
-          }).apiClearPhoto(id);
+          }).apiClearPhoto(SESSION_TOKEN, id);
         };
       }
       menu.querySelectorAll('[data-act="move"]').forEach(function(b){
@@ -1112,7 +1175,7 @@ function wireCardActions(){
           rerenderCurrentView();
         }).withFailureHandler(function(err){
           alert('Could not remove: ' + (err && err.message ? err.message : err));
-        }).apiRemovePlacement(id, state.currentOutlet);
+        }).apiRemovePlacement(SESSION_TOKEN, id, state.currentOutlet);
       };
       }
       if(deleteItem){
@@ -1124,7 +1187,7 @@ function wireCardActions(){
             rerenderCurrentView();
           }).withFailureHandler(function(err){
             alert('Could not delete: ' + (err && err.message ? err.message : err));
-          }).apiDeletePerson(id);
+          }).apiDeletePerson(SESSION_TOKEN, id);
         };
       }
     };
@@ -1183,7 +1246,7 @@ function moveLayer(id, newLayer){
     rerenderCurrentView();
   }).withFailureHandler(function(err){
     alert('Could not move: ' + (err && err.message ? err.message : err));
-  }).apiMoveLayer(id, state.currentOutlet, newLayer);
+  }).apiMoveLayer(SESSION_TOKEN, id, state.currentOutlet, newLayer);
 }
 /** Local-only role-tag set -- this was the slow one Chris flagged: sorting a whole Unsorted column one person at a time used to trigger a full reload (re-fetch + re-resolve everyone + re-download every photo) per click. */
 function setRoleTag(id, tag){
@@ -1193,7 +1256,7 @@ function setRoleTag(id, tag){
     rerenderCurrentView();
   }).withFailureHandler(function(err){
     alert('Could not update: ' + (err && err.message ? err.message : err));
-  }).apiSetRoleTag(id, tag);
+  }).apiSetRoleTag(SESSION_TOKEN, id, tag);
 }
 
 /**
@@ -1254,7 +1317,7 @@ function setupLazyPhotos(){
       // querySelectorAll, not querySelector -- the leadership overview can show the same person twice (a tier card AND an outlet-leads chip, or Outlet In-Charge at two outlets), and every occurrence needs the photo.
       document.querySelectorAll('[data-avatar-for="' + id + '"]').forEach(function(el){ setAvatarImg(el, res.dataUrl); });
     });
-  }).apiGetPhotoDataUrls(ids);
+  }).apiGetPhotoDataUrls(SESSION_TOKEN, ids);
 }
 
 // --- lightbox ---
@@ -1275,7 +1338,7 @@ function openLightbox(p){
     avatarEl.textContent = initials(p.name); hint.hidden = true;
     google.script.run.withSuccessHandler(function(res){
       if(res && res.dataUrl){ setAvatarImg(avatarEl, res.dataUrl); }
-    }).apiGetPhotoDataUrl(p.id);
+    }).apiGetPhotoDataUrl(SESSION_TOKEN, p.id);
   } else {
     avatarEl.textContent = initials(p.name); hint.hidden = false;
   }
@@ -1306,7 +1369,7 @@ function openLightbox(p){
       }).withFailureHandler(function(err){
         btn.disabled = false; btn.textContent = 'Save contact info';
         alert('Could not save: ' + (err && err.message ? err.message : err));
-      }).apiSetCompanyContact(p.id, phone, email);
+      }).apiSetCompanyContact(SESSION_TOKEN, p.id, phone, email);
     };
   }
 
@@ -1343,10 +1406,55 @@ function openPhotoModal(p){
       }).withFailureHandler(function(err){
         saveBtn.disabled = false; saveBtn.textContent = 'Save';
         alert('Could not upload: ' + (err && err.message ? err.message : err));
-      }).apiUploadPhoto(p.id, base64, file.type);
+      }).apiUploadPhoto(SESSION_TOKEN, p.id, base64, file.type);
     };
     reader.readAsDataURL(file);
   };
+}
+
+/**
+ * Limits which real outlets a Leadership Layer 1 person's placement mirrors
+ * onto -- added 2026-09-25, per Chris (Chin Chen Zhuan/"Joseph Chin" is a
+ * genuine F&B Area Manager, but only for the dessert brands, not every F&B
+ * outlet). Leaving every box unchecked (the default, and what every OTHER
+ * Layer 1 person already has) mirrors to every outlet on this scheme, same
+ * as before this feature existed -- checking specific ones limits them to
+ * just those. See apiSetPlacementScope/apiGetOutletDetail's mirror filter.
+ */
+function openScopeModal(p){
+  modalBody.innerHTML = '<h3>Set outlet scope for ' + escapeHtml(p.name) + '</h3><div class="loading">Loading outlets...</div>';
+  overlay.hidden = false;
+  google.script.run.withSuccessHandler(function(result){
+    var outlets = (result && result.outlets) || [];
+    outlets = outlets.slice().sort(function(a,b){ return a.name.localeCompare(b.name); });
+    var currentScope = {};
+    (p.scope || []).forEach(function(name){ currentScope[name.toLowerCase()] = true; });
+    var rows = outlets.map(function(o){
+      var checked = currentScope[o.name.toLowerCase()] ? ' checked' : '';
+      return '<label class="scope-row"><input type="checkbox" value="' + escapeHtml(o.name) + '"' + checked + '> ' + escapeHtml(o.name) + '</label>';
+    }).join('');
+    modalBody.innerHTML =
+      '<h3>Set outlet scope for ' + escapeHtml(p.name) + '</h3>' +
+      '<p class="scope-hint">Leave everything unchecked to keep mirroring to every outlet on this scheme (the default). Check specific outlets to limit them to just those.</p>' +
+      '<div class="scope-list">' + rows + '</div>' +
+      '<div class="modal-actions"><button type="button" class="btn btn-ghost" id="mf-cancel">Cancel</button><button type="button" class="btn btn-primary" id="mf-save">Save</button></div>';
+    document.getElementById('mf-cancel').onclick = closeModal;
+    document.getElementById('mf-save').onclick = function(){
+      var saveBtn = document.getElementById('mf-save');
+      var picked = Array.prototype.map.call(modalBody.querySelectorAll('.scope-list input:checked'), function(cb){ return cb.value; });
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+      google.script.run.withSuccessHandler(function(){
+        p.scope = picked;
+        closeModal();
+        reloadCurrentView();
+      }).withFailureHandler(function(err){
+        saveBtn.disabled = false; saveBtn.textContent = 'Save';
+        alert('Could not save: ' + (err && err.message ? err.message : err));
+      }).apiSetPlacementScope(SESSION_TOKEN, p.id, state.currentOutlet, picked);
+    };
+  }).withFailureHandler(function(err){
+    modalBody.innerHTML = '<h3>Set outlet scope</h3><div class="empty">Could not load outlets: ' + escapeHtml(err && err.message ? err.message : err) + '</div>';
+  }).apiGetOutletList(SESSION_TOKEN);
 }
 
 /**
@@ -1414,7 +1522,7 @@ function openBulkImportPhotosModal(){
         importBtn.disabled = false; importBtn.textContent = 'Import';
         progress.textContent = '';
         alert('Import failed: ' + (err && err.message ? err.message : err));
-      }).apiBulkImportProfessionalPhotos(items);
+      }).apiBulkImportProfessionalPhotos(SESSION_TOKEN, items);
     });
   };
 }
@@ -1481,7 +1589,7 @@ function openScanPfilePhotosModal(){
       scanBtn.disabled = false; scanBtn.textContent = 'Scan & Update';
       progress.textContent = '';
       alert('Scan failed: ' + (err && err.message ? err.message : err));
-    }).apiScanAndUpdateExistingPfilePhotos(names);
+    }).apiScanAndUpdateExistingPfilePhotos(SESSION_TOKEN, names);
   };
 }
 
@@ -1528,10 +1636,10 @@ function openAddModal(layer, roleTagHint){
               finishAdd_(person);
             }).withFailureHandler(function(err){
               alert('Could not add: ' + (err && err.message ? err.message : err));
-            }).apiAddPlacement(id, state.currentOutlet, layer, roleTagHint);
+            }).apiAddPlacement(SESSION_TOKEN, id, state.currentOutlet, layer, roleTagHint);
           };
         });
-      }).apiSearchPeople(q);
+      }).apiSearchPeople(SESSION_TOKEN, q);
     }, 250);
   });
 
@@ -1553,7 +1661,7 @@ function openAddModal(layer, roleTagHint){
     }).withFailureHandler(function(err){
       btn.disabled = false; btn.textContent = 'Add person';
       alert('Could not add: ' + (err && err.message ? err.message : err));
-    }).apiCreateManualPerson(name, nickname, position, state.currentOutlet, layer, roleTagHint);
+    }).apiCreateManualPerson(SESSION_TOKEN, name, nickname, position, state.currentOutlet, layer, roleTagHint);
   };
 }
 
@@ -1578,8 +1686,11 @@ function finishAdd_(person){
   rerenderCurrentView();
 }
 
-goIndex();
-checkAdminStatus();
+// doGet already resolved sign-in server-side before this page rendered (see
+// the SESSION_TOKEN/authorized scriptlets above) -- only load the chart if
+// that came back authorized. An unauthorized visitor just sees the sign-in
+// gate's markup as doGet rendered it; nothing more to do here.
+if (<?!= authorized ? 'true' : 'false' ?>) goIndex();
 </script>
 </body>
 </html>
