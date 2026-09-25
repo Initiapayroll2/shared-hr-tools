@@ -1,0 +1,1585 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Libre+Franklin:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F3F5EF; --surface:#FFFFFF; --surface-2:#EAEEE5; --ink:#1C231F; --ink-soft:#57635B; --ink-faint:#8B968E; --line:#DBE1D5;
+  --accent:#2F6F5E; --accent-ink:#1E4A3F; --accent-soft:#DCEAE4;
+  --amber:#B9793A; --amber-soft:#F3E4D2;
+  --rust:#A6503B; --rust-soft:#F1DFD9;
+  --blue:#3A6EA5; --blue-soft:#DCE6F1;
+  --shadow: 0 1px 2px rgba(28,35,31,0.06), 0 4px 14px rgba(28,35,31,0.05);
+  --font-display:'Fraunces',Georgia,serif;
+  --font-body:'Libre Franklin',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+*{box-sizing:border-box;}
+[hidden]{ display:none !important; }
+body{ margin:0; background:var(--bg); color:var(--ink); font-family:var(--font-body); }
+.wrap{ max-width:1180px; margin:0 auto; padding:28px 20px 80px; display:flex; flex-direction:column; gap:22px; }
+
+.masthead{ display:flex; flex-wrap:wrap; gap:16px; justify-content:space-between; align-items:flex-end; }
+.masthead h1{ font-family:var(--font-display); font-weight:600; font-size:clamp(1.4rem,1.1rem + 1.2vw,2rem); margin:0; letter-spacing:-0.01em; }
+.eyebrow{ font:600 0.7rem/1 var(--font-body); text-transform:uppercase; letter-spacing:0.11em; color:var(--accent); margin:0 0 6px; }
+.sub{ margin:6px 0 0; color:var(--ink-soft); font-size:0.9rem; max-width:56ch; }
+.banner{ background:var(--amber-soft); color:var(--amber); border:1px solid var(--amber); border-radius:10px; padding:9px 14px; font-size:0.82rem; }
+
+.os-table{ display:flex; flex-direction:column; gap:8px; }
+.os-row{ display:flex; flex-wrap:wrap; align-items:center; gap:10px; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px 14px; }
+.os-name{ flex:1 1 220px; font-weight:600; font-size:0.9rem; }
+.os-badge{ margin-left:8px; font:600 0.65rem var(--font-body); text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-faint); background:var(--surface-2); border-radius:6px; padding:2px 6px; }
+.os-scheme{ border:1px solid var(--line); background:var(--surface-2); color:var(--ink); border-radius:8px; padding:7px 10px; font:500 0.85rem var(--font-body); }
+.os-departments{ flex:1 1 260px; border:1px solid var(--line); background:var(--surface-2); color:var(--ink); border-radius:8px; padding:7px 10px; font:500 0.85rem var(--font-body); }
+.os-status{ font-size:0.75rem; color:var(--ink-soft); min-width:70px; }
+.os-layer1-toggle{ display:flex; align-items:center; gap:6px; font-size:0.78rem; color:var(--ink-soft); flex:1 1 260px; }
+
+.help-content{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:8px 26px 26px; box-shadow:var(--shadow); max-width:820px; }
+.help-content h3{ font-family:var(--font-display); font-size:1.1rem; margin:26px 0 8px; }
+.help-content p{ font-size:0.88rem; line-height:1.6; color:var(--ink-soft); margin:0 0 10px; }
+.help-content ul{ margin:0 0 10px; padding-left:1.3em; }
+.help-content li{ font-size:0.88rem; line-height:1.6; color:var(--ink-soft); margin-bottom:6px; }
+.help-content b{ color:var(--ink); }
+
+.toolbar{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:12px; box-shadow:var(--shadow); }
+.toolbar input[type=search]{ flex:1 1 220px; min-width:160px; border:1px solid var(--line); background:var(--surface-2); color:var(--ink); border-radius:9px; padding:9px 12px; font:500 0.875rem var(--font-body); }
+.spacer{ flex:1 1 auto; }
+.btn{ border:1px solid transparent; border-radius:9px; padding:9px 16px; font:600 0.85rem var(--font-body); cursor:pointer; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.btn-primary{ background:var(--accent); color:var(--surface); }
+.btn-ghost{ background:transparent; border-color:var(--line); color:var(--ink); }
+.btn-ghost:hover{ background:var(--surface-2); }
+.btn-small{ padding:5px 10px; font-size:0.72rem; border-radius:7px; }
+.btn-ghost.danger{ color:var(--rust); border-color:var(--rust-soft); }
+
+/* duplicate profiles finder (temporary) */
+.dup-group{ margin-bottom:22px; }
+.dup-group h3{ font-family:var(--font-display); font-size:1rem; margin:0 0 10px; }
+.dup-cards{ display:flex; flex-wrap:wrap; gap:14px; }
+.dup-card{ width:160px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:12px; text-align:center; box-shadow:var(--shadow); }
+.dup-name{ font-weight:600; font-size:0.8rem; margin-top:6px; }
+.dup-pos{ font-size:0.7rem; color:var(--ink-soft); margin-top:2px; }
+.dup-placements{ font-size:0.62rem; color:var(--ink-faint); margin-top:6px; min-height:2em; }
+.loading{ text-align:center; color:var(--ink-faint); padding:60px 0; font-size:0.9rem; }
+.empty{ text-align:center; padding:48px 20px; color:var(--ink-soft); border:1px dashed var(--line); border-radius:14px; background:var(--surface); }
+
+/* outlet index */
+.outlet-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(200px,1fr)); gap:14px; }
+.outlet-tile{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:var(--shadow); cursor:pointer; text-align:left; font-family:inherit; }
+.outlet-tile:hover{ border-color:var(--accent); }
+.outlet-tile h3{ font-family:var(--font-display); font-size:1.05rem; margin:0 0 4px; }
+.outlet-tile span{ font-size:0.78rem; color:var(--ink-soft); }
+.leadership-tile-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:14px; }
+.leadership-tile{ background:var(--blue-soft); border-color:var(--blue); }
+.leadership-tile h3{ color:var(--blue); font-size:0.95rem; }
+.incoming-tile{ background:var(--amber-soft); border-color:var(--amber); }
+.incoming-tile h3{ color:var(--amber); font-size:0.95rem; }
+.incoming-summary{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 18px; box-shadow:var(--shadow); color:var(--ink-soft); font-size:0.86rem; }
+.incoming-section{ display:flex; flex-direction:column; gap:12px; }
+.incoming-section-head{ display:flex; align-items:baseline; gap:9px; }
+.incoming-section-head h2{ font-family:var(--font-display); font-size:1.08rem; margin:0; }
+.incoming-count{ color:var(--ink-faint); font-size:0.76rem; }
+.incoming-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px; }
+.incoming-card{ display:flex; gap:12px; align-items:flex-start; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px; box-shadow:var(--shadow); position:relative; }
+.incoming-card.management-trainee{ border-color:var(--amber); background:linear-gradient(135deg,var(--amber-soft),var(--surface) 65%); }
+.incoming-avatar{ width:60px; height:60px; flex:0 0 60px; border-radius:50%; overflow:hidden; background:var(--accent-soft); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; font:600 1rem var(--font-display); }
+.incoming-avatar img{ width:100%; height:100%; object-fit:cover; }
+.incoming-body{ min-width:0; }
+.incoming-name{ font-weight:700; font-size:0.86rem; line-height:1.25; }
+.incoming-position{ color:var(--ink-soft); font-size:0.75rem; margin-top:3px; }
+.incoming-meta{ color:var(--ink-faint); font-size:0.68rem; line-height:1.45; margin-top:7px; }
+.incoming-status{ display:inline-block; background:var(--surface-2); color:var(--ink-soft); border-radius:99px; padding:3px 7px; margin-top:7px; font:600 0.58rem var(--font-body); text-transform:uppercase; letter-spacing:.04em; }
+.incoming-mt-badge{ display:inline-block; background:var(--amber); color:#fff; border-radius:99px; padding:3px 7px; margin-top:7px; font:700 0.58rem var(--font-body); text-transform:uppercase; letter-spacing:.04em; }
+
+/* leadership overview -- outlet-leads rollup */
+.outlet-leads-head{ background:var(--accent-soft); border-radius:10px; padding:8px 14px; font-family:var(--font-display); font-weight:600; }
+.outlet-leads-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:14px; }
+.outlet-lead-box{ background:var(--surface-2); border-radius:12px; padding:14px; }
+.outlet-lead-box h4{ font-family:var(--font-display); font-size:0.92rem; margin:0 0 10px; }
+.outlet-lead-chips{ display:flex; flex-wrap:wrap; gap:14px; }
+.lead-chip{ display:flex; flex-direction:column; align-items:center; width:64px; text-align:center; }
+.avatar-sm{ width:44px; height:44px; border-radius:50%; background:var(--accent-soft); color:var(--accent-ink); overflow:hidden; display:flex; align-items:center; justify-content:center; font:600 0.8rem var(--font-display); margin:0 auto 4px; }
+.avatar-sm img{ width:100%; height:100%; object-fit:cover; }
+.lead-chip .lead-name{ font-size:0.68rem; font-weight:600; line-height:1.2; }
+.lead-chip .lead-outlet{ font-size:0.6rem; color:var(--ink-faint); margin-top:2px; }
+
+/* outlet detail */
+.outlet-head{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.outlet-head h1{ margin:0; }
+.layer{ display:flex; flex-direction:column; gap:12px; }
+.layer-head{ display:flex; align-items:baseline; gap:10px; }
+.layer-head h2{ font-family:var(--font-display); font-size:1.05rem; margin:0; }
+.layer-head .layer-hint{ font-size:0.76rem; color:var(--ink-faint); }
+.layer-band{ border-radius:14px; padding:16px 18px; background:var(--surface-2); }
+.layer-band.l1{ background:var(--blue-soft); }
+.layer-band.l2{ background:var(--accent-soft); }
+.gcardgrid{ display:flex; flex-wrap:wrap; gap:20px 16px; align-items:flex-start; }
+.role-columns{ display:flex; flex-wrap:wrap; gap:16px; }
+.role-col{ flex:1 1 220px; min-width:220px; background:var(--surface); border-radius:12px; padding:12px; }
+.role-col h4{ font:700 0.7rem var(--font-body); text-transform:uppercase; letter-spacing:0.08em; color:var(--ink-soft); margin:0 0 10px; display:flex; align-items:center; gap:6px; }
+.role-col.unsorted h4{ color:var(--rust); }
+.status-group + .status-group{ margin-top:14px; }
+.status-label{ font:600 0.66rem var(--font-body); text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-faint); margin:0 0 6px; padding-bottom:4px; border-bottom:1px solid var(--line); }
+
+.gcard{ width:112px; text-align:center; position:relative; }
+.gcard.resigned{ opacity:0.55; }
+.gcard.resigning-soon{ border:2px solid var(--rust); border-radius:12px; padding:6px 4px; }
+.gcard.resigning-soon .avatar-lg{ box-shadow:0 0 0 3px var(--rust), var(--shadow); }
+.gcard .lwd-note{ font-size:0.62rem; color:var(--rust); font-weight:600; margin-top:2px; }
+.avatar-lg{ width:76px; height:76px; border-radius:50%; margin:0 auto 8px; background:var(--accent-soft); color:var(--accent-ink); box-shadow:0 0 0 3px var(--surface), var(--shadow); overflow:hidden; display:flex; align-items:center; justify-content:center; font:600 1.15rem var(--font-display); cursor:pointer; }
+.avatar-lg img{ width:100%; height:100%; object-fit:cover; }
+.gname{ font-weight:600; font-size:0.82rem; line-height:1.25; }
+.gnick{ font-size:0.7rem; color:var(--ink-faint); font-style:italic; display:block; }
+.gpos{ font-size:0.68rem; color:var(--ink-soft); margin-top:3px; }
+.gsource{ font-size:0.62rem; color:var(--blue); margin-top:2px; }
+.grole{ font-size:0.62rem; color:var(--accent-ink); font-weight:600; margin-top:2px; }
+.badge{ display:inline-block; margin-top:3px; font:600 0.6rem var(--font-body); text-transform:uppercase; letter-spacing:0.05em; padding:2px 7px; border-radius:99px; background:var(--rust-soft); color:var(--rust); }
+.gmenu-btn{ position:absolute; top:-2px; right:2px; background:var(--surface); border:1px solid var(--line); border-radius:50%; width:22px; height:22px; color:var(--ink-faint); cursor:pointer; font-size:0.9rem; }
+.gmenu-btn:hover{ color:var(--ink); }
+.add-tile{ width:76px; height:76px; border-radius:50%; border:2px dashed var(--line); background:transparent; color:var(--ink-faint); font-size:1.6rem; cursor:pointer; margin:0 auto; display:flex; align-items:center; justify-content:center; }
+.add-tile:hover{ border-color:var(--accent); color:var(--accent); }
+.add-tile-wrap{ width:112px; text-align:center; }
+.add-tile-wrap .lbl{ font-size:0.7rem; color:var(--ink-faint); margin-top:8px; display:block; }
+
+.menu{ position:absolute; right:0; top:26px; background:var(--surface); border:1px solid var(--line); border-radius:9px; box-shadow:var(--shadow); z-index:5; min-width:170px; padding:4px; display:flex; flex-direction:column; text-align:left; }
+.menu button{ background:none; border:none; text-align:left; padding:7px 9px; font:500 0.78rem var(--font-body); color:var(--ink); border-radius:6px; cursor:pointer; }
+.menu button:hover{ background:var(--surface-2); }
+.menu button.danger{ color:var(--rust); }
+.menu .menu-label{ font:700 0.62rem var(--font-body); text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-faint); padding:6px 9px 2px; }
+
+.overlay{ position:fixed; inset:0; background:rgba(15,20,17,0.5); display:flex; align-items:flex-start; justify-content:center; padding:6vh 16px; z-index:50; overflow-y:auto; }
+.modal{ background:var(--surface); border-radius:16px; width:100%; max-width:460px; padding:22px; box-shadow:var(--shadow); border:1px solid var(--line); }
+.modal h3{ font-family:var(--font-display); margin:0 0 14px; font-size:1.15rem; }
+.field{ display:flex; flex-direction:column; gap:5px; margin-bottom:12px; }
+.field label{ font:600 0.68rem var(--font-body); text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-soft); }
+.field input, .field select{ border:1px solid var(--line); background:var(--surface-2); color:var(--ink); border-radius:8px; padding:9px 10px; font:500 0.875rem var(--font-body); width:100%; }
+.modal-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+.search-results{ max-height:260px; overflow-y:auto; border:1px solid var(--line); border-radius:9px; margin-top:6px; }
+.search-result{ padding:9px 10px; cursor:pointer; border-bottom:1px solid var(--line); }
+.search-result:last-child{ border-bottom:none; }
+.search-result:hover{ background:var(--surface-2); }
+.search-result .sr-name{ font-weight:600; font-size:0.85rem; }
+.search-result .sr-meta{ font-size:0.72rem; color:var(--ink-soft); }
+.divider-or{ text-align:center; color:var(--ink-faint); font-size:0.75rem; margin:14px 0; }
+.link-btn{ background:none; border:none; color:var(--accent); font:600 0.8rem var(--font-body); cursor:pointer; padding:0; text-decoration:underline; }
+
+.lightbox-overlay{ position:fixed; inset:0; background:rgba(15,20,17,0.7); display:flex; align-items:center; justify-content:center; padding:6vh 16px; z-index:60; }
+.lightbox-card{ background:var(--surface); border-radius:18px; padding:22px; box-shadow:var(--shadow); text-align:center; max-width:340px; width:100%; }
+.lightbox-card .avatar-xl{ width:220px; height:220px; max-width:100%; border-radius:16px; margin:0 auto 16px; background:var(--accent-soft); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; font:600 3rem var(--font-display); overflow:hidden; }
+.lightbox-card .avatar-xl img{ width:100%; height:100%; object-fit:contain; }
+.lightbox-card h3{ font-family:var(--font-display); margin:0 0 2px; font-size:1.2rem; }
+.lightbox-card .lx-meta{ color:var(--ink-soft); font-size:0.85rem; margin-bottom:16px; }
+.lightbox-card .lx-hint{ color:var(--ink-faint); font-size:0.75rem; margin-bottom:16px; }
+.lightbox-card .lx-contact{ text-align:left; margin-bottom:16px; padding-top:12px; border-top:1px solid var(--line); }
+.lightbox-card .lx-contact .field{ margin-bottom:10px; }
+.lightbox-card .lx-saved{ font-size:0.75rem; color:var(--accent); margin-left:8px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <div class="loading" id="boot-loading">Loading...</div>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="modal" id="modal-body"></div>
+</div>
+
+<div class="lightbox-overlay" id="lightbox-overlay" hidden>
+  <div class="lightbox-card">
+    <div class="avatar-xl" id="lightbox-avatar"></div>
+    <h3 id="lightbox-name"></h3>
+    <p class="lx-meta" id="lightbox-meta"></p>
+    <p class="lx-hint" id="lightbox-hint" hidden>No photo yet -- use the &#8942; menu on their card to upload one.</p>
+    <div class="lx-contact" id="lightbox-contact">
+      <div class="field"><label>Company phone</label><input type="text" id="lightbox-phone" placeholder="e.g. +65 1234 5678"></div>
+      <div class="field"><label>Company email</label><input type="text" id="lightbox-email" placeholder="e.g. name@initia.sg"></div>
+      <button type="button" class="btn btn-primary btn-small" id="lightbox-save-contact">Save contact info</button>
+      <span class="lx-saved" id="lightbox-saved" hidden>Saved</span>
+    </div>
+    <p class="lx-hint" id="lightbox-no-contact-hint" hidden>Part-time staff don't have a company phone/email on file.</p>
+    <button type="button" class="btn btn-ghost" id="lightbox-close">Close</button>
+  </div>
+</div>
+
+<script>
+
+var state = { view: 'index', outlets: [], currentOutlet: null, detail: null, menuOpenId: null, isAdmin: false };
+
+/** Fetched once on boot, in parallel with the outlet list -- defaults to false (hides admin-only controls) until it resolves. Non-admins can still browse everything; server-side requireAdmin_() is the real enforcement, this is just so non-admins aren't shown controls they can't use. */
+function checkAdminStatus(){
+  google.script.run.withSuccessHandler(function(isAdmin){
+    state.isAdmin = !!isAdmin;
+    if(state.view === 'index') renderIndex();
+  }).withFailureHandler(function(){ /* stay non-admin on error -- safe default */ }).apiIsCurrentUserAdmin();
+}
+
+function escapeHtml(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+/**
+ * Sets an avatar element's photo. Reverted 2026-09-23 -- @66's "measure the
+ * photo, switch tall ones to object-fit:contain" idea (meant to stop full-
+ * body photos like Jitendra's from being cropped in the grid) caught normal
+ * headshots too: most ID-style photos are already somewhat taller than wide
+ * (a typical 4:5 or 3:4 crop), so a lot of completely normal photos were
+ * also being switched to "shrink to fit, show background around it" --
+ * confirmed live: Chris reported the WHOLE grid looking inconsistent/wrong
+ * after this, not just the rare full-body outlier. Grid tiles (.avatar-sm/
+ * .avatar-lg) go back to plain object-fit:cover (always fills the circle,
+ * matching how this looked for weeks before any of this crop work started)
+ * -- for the rare genuinely-bad source photo (full-body, odd framing), the
+ * real fix is supplying a properly-cropped headshot for that person (same
+ * as Ein Shan Ko's case), not a CSS/JS trick that keeps trading one
+ * failure mode for another. The lightbox's .avatar-xl stays
+ * object-fit:contain, but that's set directly in its own CSS rule, not
+ * here -- nothing dynamic needed for either case now.
+ */
+function setAvatarImg(el, src){
+  el.innerHTML = '<img src="' + src + '" alt="">';
+}
+function initials(name){ var parts=String(name||'').trim().split(/\s+/).filter(Boolean); if(!parts.length) return '?'; return (parts[0][0]+(parts.length>1?parts[parts.length-1][0]:'')).toUpperCase(); }
+
+function showBoot(msg){ document.getElementById('wrap').innerHTML = '<div class="loading">' + escapeHtml(msg) + '</div>'; }
+
+// Timing calls remain harmless for older call sites, but the temporary
+// on-screen performance panel has been retired from the production portal.
+function logPerf(){}
+function logPerfRaw(){}
+
+/**
+ * Visible proof that the org chart's own housekeeping caught and fixed
+ * something -- per Chris 2026-09-23 ("why do I have to find this out
+ * myself"). Shown whenever apiGetOutletList/apiGetOutletDetail/
+ * apiGetLeadershipOverview's reconcile pass actually changed something
+ * (a new hire auto-added, or someone moved to follow a location change).
+ * Auto-dismisses after a while so it doesn't linger forever; can also be
+ * closed by hand.
+ */
+var _syncBannerTimeout = null;
+function showSyncBanner(lines){
+  if(!lines || !lines.length) return;
+  var el = document.getElementById('sync-banner');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'sync-banner';
+    el.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#1c4d2e;color:#fff;padding:10px 16px;border-radius:10px;font:600 12px var(--font-body, sans-serif);z-index:9999;max-width:560px;line-height:1.6;box-shadow:0 4px 14px rgba(0,0,0,0.3);display:flex;align-items:flex-start;gap:10px;';
+    document.body.appendChild(el);
+  }
+  el.innerHTML = '<div style="flex:1">' + lines.map(function(l){ return '✓ ' + escapeHtml(l); }).join('<br>') + '</div>' +
+    '<button id="sync-banner-close" style="background:none;border:none;color:#fff;cursor:pointer;font-size:15px;line-height:1;padding:0;">&#10005;</button>';
+  document.getElementById('sync-banner-close').onclick = function(){ el.remove(); };
+  clearTimeout(_syncBannerTimeout);
+  _syncBannerTimeout = setTimeout(function(){ if(el && el.parentNode) el.remove(); }, 15000);
+}
+
+// --- boot / navigation ---
+function goIndex(){
+  state.view = 'index';
+  var t0 = Date.now();
+  google.script.run.withSuccessHandler(function(result){
+    logPerf('apiGetOutletList total', Date.now() - t0);
+    // TEMPORARY (2026-09-21) -- apiGetOutletList now returns {outlets, _timing} for this diagnostic pass; log the breakdown too, then revert both sides once the bottleneck is found.
+    if(result && result._timing){
+      var t = result._timing;
+      logPerfRaw('  reconcile: ' + t.reconcile + 'ms (changed=' + t.reconcileChanged + ', read=' + t.reconcileReadMs + ' scan=' + t.reconcileScanMs + ' write=' + t.reconcileWriteMs + ')');
+      logPerfRaw('  readEmployees: ' + t.readEmployees + 'ms');
+      logPerfRaw('  readPlacements: ' + t.readPlacements + 'ms');
+      logPerfRaw('  build: ' + t.build + 'ms');
+    }
+    state.outlets = (result && result.outlets) || result;
+    renderIndex();
+    if(result && result.syncSummary) showSyncBanner(result.syncSummary);
+  }).withFailureHandler(function(err){ showBoot('Could not load outlets: ' + (err && err.message ? err.message : err)); }).apiGetOutletList();
+  showBoot('Loading outlets...');
+}
+
+function goOutlet(name){
+  state.view = 'outlet';
+  state.currentOutlet = name;
+  showBoot('Loading ' + name + '...');
+  var t0 = Date.now();
+  google.script.run.withSuccessHandler(function(detail){
+    logPerf('apiGetOutletDetail(' + name + ')', Date.now() - t0);
+    state.detail = detail;
+    renderOutlet();
+    if(detail && detail.syncSummary) showSyncBanner(detail.syncSummary);
+  }).withFailureHandler(function(err){ showBoot('Could not load ' + name + ': ' + (err && err.message ? err.message : err)); }).apiGetOutletDetail(name);
+}
+
+/** One of the three cross-outlet leadership pages ('fnb'/'salon'/'groupops') -- not a real outlet, each stored against its own reserved sentinel name (see LEADERSHIP_PAGES server-side) so Add/Move/Remove/photo all reuse the exact same machinery as a normal outlet. */
+function goLeadership(kind){
+  state.view = 'leadership';
+  state.leadershipKind = kind;
+  showBoot('Loading leadership overview...');
+  google.script.run.withSuccessHandler(function(detail){
+    state.detail = detail;
+    state.currentOutlet = detail.outlet;
+    renderLeadership();
+    if(detail && detail.syncSummary) showSyncBanner(detail.syncSummary);
+  }).withFailureHandler(function(err){ showBoot('Could not load: ' + (err && err.message ? err.message : err)); }).apiGetLeadershipOverview(kind);
+}
+
+function goIncomingEmployees(){
+  state.view = 'incoming';
+  showBoot('Loading full-time incoming employees...');
+  google.script.run.withSuccessHandler(function(result){
+    state.incomingEmployees = result;
+    renderIncomingEmployees();
+  }).withFailureHandler(function(err){
+    document.getElementById('wrap').innerHTML =
+      '<div class="outlet-head"><button class="btn btn-ghost" id="btn-back">&larr; All outlets</button><h1>Incoming Employees</h1></div>' +
+      '<div class="empty"><b>Could not load incoming employees</b><br>' + escapeHtml(err && err.message ? err.message : err) + '</div>';
+    document.getElementById('btn-back').onclick = goIndex;
+  }).apiGetIncomingEmployees();
+}
+
+function renderIncomingEmployees(){
+  var result = state.incomingEmployees || { industries:[], total:0 };
+  var sections = result.industries.map(function(industry){
+    var cards = industry.employees.map(function(person){
+      var avatar = person.photoUrl
+        ? '<img src="' + escapeHtml(person.photoUrl) + '" alt="">'
+        : initials(person.fullName);
+      var location = [person.outlet, person.department].filter(Boolean).join(' · ') || 'Outlet / department not set';
+      return '<div class="incoming-card' + (person.isManagementTrainee ? ' management-trainee' : '') + '">' +
+        (state.isAdmin ? '<button class="gmenu-btn" data-action="incoming-menu" data-id="' + escapeHtml(person.id) + '">&#8943;</button>' : '') +
+        '<div class="incoming-avatar">' + avatar + '</div><div class="incoming-body">' +
+        '<div class="incoming-name">' + escapeHtml(person.fullName) + '</div>' +
+        '<div class="incoming-position">' + escapeHtml(person.position || 'Position not set') + '</div>' +
+        (person.isManagementTrainee ? '<span class="incoming-mt-badge">Management Trainee</span>' : '') +
+        '<div class="incoming-meta">' + escapeHtml(location) + '<br>Join date: ' + escapeHtml(person.joinDate || 'TBC') + '</div>' +
+        '<span class="incoming-status">' + escapeHtml(person.status || 'Onboarding') + '</span>' +
+        '</div></div>';
+    }).join('');
+    return '<section class="incoming-section"><div class="incoming-section-head"><h2>' + escapeHtml(industry.label) + '</h2>' +
+      '<span class="incoming-count">' + industry.employees.length + ' incoming</span></div>' +
+      (cards ? '<div class="incoming-grid">' + cards + '</div>' : '<div class="empty">No active full-time onboarding records.</div>') + '</section>';
+  }).join('');
+  document.getElementById('wrap').innerHTML =
+    '<div class="outlet-head"><button class="btn btn-ghost" id="btn-back">&larr; All outlets</button>' +
+    '<h1>Incoming Employees</h1><button class="btn btn-ghost" id="btn-incoming-refresh">&#8635; Refresh</button></div>' +
+    '<div class="incoming-summary"><b>' + result.total + ' full-time employees onboarding.</b> Management Trainees appear first, followed by position and name. Photos are matched by full name from the Application Form response sheet.</div>' + sections;
+  document.getElementById('btn-back').onclick = goIndex;
+  document.getElementById('btn-incoming-refresh').onclick = goIncomingEmployees;
+  if(state.isAdmin) wireIncomingCardMenus_();
+}
+
+/** Finds one person's data out of state.incomingEmployees by ClickUp task id -- for the menu, which only has the id in its data attribute. */
+function findIncomingPersonById_(id){
+  var result = state.incomingEmployees || { industries: [] };
+  for(var i = 0; i < result.industries.length; i++){
+    var list = result.industries[i].employees;
+    for(var j = 0; j < list.length; j++){ if(list[j].id === id) return list[j]; }
+  }
+  return null;
+}
+
+/**
+ * Manual photo override for a card whose auto-match (by full name, against
+ * the Application Form response sheet) missed or picked the wrong person --
+ * per Chris 2026-09-25. Deliberately its own small menu, not the generic
+ * per-outlet-card wireCardActions system, since these are ClickUp tasks
+ * (id-keyed), not employees/placements at all.
+ */
+function wireIncomingCardMenus_(){
+  document.querySelectorAll('[data-action="incoming-menu"]').forEach(function(btn){
+    btn.onclick = function(ev){
+      ev.stopPropagation();
+      closePopovers();
+      var id = btn.dataset.id;
+      var person = findIncomingPersonById_(id);
+      if(!person) return;
+      var menu = document.createElement('div'); menu.className = 'menu';
+      menu.innerHTML = '<button data-act="upload">Upload photo</button>' +
+        (person.photoIsManual ? '<button data-act="clear" class="danger">Clear manual photo</button>' : '');
+      btn.parentElement.appendChild(menu);
+      menu.querySelector('[data-act="upload"]').onclick = function(){ closePopovers(); openIncomingPhotoPicker_(id); };
+      var clearBtn = menu.querySelector('[data-act="clear"]');
+      if(clearBtn) clearBtn.onclick = function(){
+        closePopovers();
+        if(!confirm('Clear ' + person.fullName + '’s manually-uploaded photo? Falls back to the auto-matched one, if any.')) return;
+        google.script.run.withSuccessHandler(function(){
+          goIncomingEmployees();
+        }).withFailureHandler(function(err){
+          alert('Could not clear photo: ' + (err && err.message ? err.message : err));
+        }).apiClearIncomingEmployeePhoto(id);
+      };
+    };
+  });
+}
+
+var _incomingFileInput = null;
+function openIncomingPhotoPicker_(taskId){
+  if(!_incomingFileInput){
+    _incomingFileInput = document.createElement('input');
+    _incomingFileInput.type = 'file';
+    _incomingFileInput.accept = 'image/*';
+    _incomingFileInput.style.display = 'none';
+    document.body.appendChild(_incomingFileInput);
+  }
+  _incomingFileInput.value = '';
+  _incomingFileInput.onchange = function(){
+    var file = _incomingFileInput.files[0];
+    if(!file) return;
+    var reader = new FileReader();
+    reader.onload = function(){
+      google.script.run.withSuccessHandler(function(){
+        goIncomingEmployees();
+      }).withFailureHandler(function(err){
+        alert('Could not upload photo: ' + (err && err.message ? err.message : err));
+      }).apiSetIncomingEmployeePhoto(taskId, reader.result.split(',')[1], file.type, file.name);
+    };
+    reader.readAsDataURL(file);
+  };
+  _incomingFileInput.click();
+}
+
+// --- outlet settings (admin) ---
+// Chris 2026-09-23: getRoleSchemeForOutlet_'s heuristics had been
+// misclassifying some salon/back-office outlets as F&B (so F&B
+// Leadership's Layer 1 was showing up where it shouldn't) -- this screen
+// lets the team assign each outlet's Role Scheme explicitly instead.
+var ROLE_SCHEME_LABELS = { fnb: 'F&B', salon: 'Salon', office: 'Office', flat: 'Flat (no split)', department: 'By Department' };
+function goOutletSettings(){
+  state.view = 'outletSettings';
+  showBoot('Loading outlet settings...');
+  google.script.run.withSuccessHandler(function(rows){
+    state.outletSettings = rows;
+    renderOutletSettings();
+  }).withFailureHandler(function(err){ showBoot('Could not load outlet settings: ' + (err && err.message ? err.message : err)); }).apiGetOutletSettingsAdmin();
+}
+
+function renderOutletSettings(){
+  var rows = state.outletSettings || [];
+  var schemeOptions = ['', 'fnb', 'salon', 'office', 'flat', 'department'];
+  var rowsHtml = rows.map(function(o, i){
+    var options = schemeOptions.map(function(s){
+      var label = s === '' ? 'Auto-detect (' + ROLE_SCHEME_LABELS[o.scheme] + ')' : ROLE_SCHEME_LABELS[s];
+      var selected = (o.isOverride ? o.scheme : '') === s ? ' selected' : '';
+      return '<option value="' + s + '"' + selected + '>' + escapeHtml(label) + '</option>';
+    }).join('');
+    var showLayer1Toggle = o.scheme === 'fnb' || o.scheme === 'salon';
+    return '<div class="os-row" data-index="' + i + '">' +
+      '<div class="os-name">' + escapeHtml(o.name) + (o.isOverride ? '' : '<span class="os-badge">auto</span>') + '</div>' +
+      '<select class="os-scheme" id="os-scheme-' + i + '">' + options + '</select>' +
+      '<input type="text" class="os-departments" id="os-departments-' + i + '" placeholder="e.g. Project, Warehouse, Procurement, Maintenance" value="' + escapeHtml(o.departments.join(', ')) + '"' + (o.scheme === 'department' ? '' : ' hidden') + '>' +
+      '<label class="os-layer1-toggle" id="os-layer1-wrap-' + i + '"' + (showLayer1Toggle ? '' : ' hidden') + '>' +
+      '<input type="checkbox" id="os-layer1-' + i + '"' + (o.layer1Manual ? ' checked' : '') + '> Manage Layer 1 separately (don\'t follow leadership)</label>' +
+      '<button type="button" class="btn btn-ghost os-save" id="os-save-' + i + '">Save</button>' +
+      '<span class="os-status" id="os-status-' + i + '"></span>' +
+      '</div>';
+  }).join('');
+
+  document.getElementById('wrap').innerHTML =
+    '<div class="outlet-head"><button class="btn btn-ghost" id="btn-back">&larr; All outlets</button>' +
+    '<h1>Outlet Settings</h1></div>' +
+    '<p class="lx-hint">Assign each outlet\'s Role Scheme by hand. An outlet with no explicit setting keeps auto-detecting (shown as "auto") -- a safety net so a brand-new outlet is never left unclassified.</p>' +
+    '<div class="os-table">' + rowsHtml + '</div>';
+
+  document.getElementById('btn-back').onclick = goIndex;
+  rows.forEach(function(o, i){
+    var schemeEl = document.getElementById('os-scheme-' + i);
+    var deptEl = document.getElementById('os-departments-' + i);
+    var layer1El = document.getElementById('os-layer1-' + i);
+    var layer1WrapEl = document.getElementById('os-layer1-wrap-' + i);
+    schemeEl.onchange = function(){
+      deptEl.hidden = schemeEl.value !== 'department';
+      var effectiveScheme = schemeEl.value || o.scheme;
+      layer1WrapEl.hidden = effectiveScheme !== 'fnb' && effectiveScheme !== 'salon';
+    };
+    document.getElementById('os-save-' + i).onclick = function(){
+      var statusEl = document.getElementById('os-status-' + i);
+      statusEl.textContent = 'Saving...';
+      google.script.run.withSuccessHandler(function(){
+        statusEl.textContent = 'Saved.';
+        o.isOverride = !!schemeEl.value;
+        o.scheme = schemeEl.value || o.scheme;
+        o.layer1Manual = layer1El.checked;
+      }).withFailureHandler(function(err){
+        statusEl.textContent = 'Failed: ' + (err && err.message ? err.message : err);
+      }).apiSetOutletSetting(o.name, schemeEl.value, deptEl.value, layer1El.checked);
+    };
+  });
+}
+
+// --- manage access (admin) ---
+// Per Chris 2026-09-24: day-to-day admin management, without needing a code
+// change/deploy for every new colleague. The PERMANENT list (hardcoded in
+// Config.js, shown here read-only) stays deploy-only on purpose -- see
+// apiGetAdminList's own comment server-side for why.
+function goManageAccess(){
+  state.view = 'manageAccess';
+  showBoot('Loading access list...');
+  google.script.run.withSuccessHandler(function(res){
+    state.adminList = res;
+    renderManageAccess();
+  }).withFailureHandler(function(err){ showBoot('Could not load access list: ' + (err && err.message ? err.message : err)); }).apiGetAdminList();
+}
+
+/**
+ * Two tiers, per Chris 2026-09-25 (PDPA -- employee photos/names are
+ * sensitive, so the app can no longer be open to anyone with the link):
+ * Super Admin (edit everything -- add/move/remove people, photos, Outlet
+ * Settings, Manage Access itself) and Viewer (can open and browse the org
+ * chart, no editing at all). Nobody outside BOTH lists gets in at all
+ * anymore -- see doGet_'s isAuthorizedVisitor_ check server-side, which
+ * shows an "Access restricted" page instead of the org chart itself.
+ */
+function renderManageAccess(){
+  var res = state.adminList || { permanent: [], managed: [], viewers: [] };
+  var permanentHtml = res.permanent.map(function(email){
+    return '<div class="os-row"><div class="os-name">' + escapeHtml(email) + ' <span class="os-badge">permanent</span></div>' +
+      '<span class="lx-hint">Edit Config.js and redeploy to change this one.</span></div>';
+  }).join('');
+  var managedHtml = res.managed.length ? res.managed.map(function(email){
+    return '<div class="os-row"><div class="os-name">' + escapeHtml(email) + '</div>' +
+      '<button type="button" class="btn btn-ghost danger" data-remove-admin="' + escapeHtml(email) + '">Remove</button></div>';
+  }).join('') : '<p class="lx-hint">No additional Super Admins yet -- add one below.</p>';
+  var viewersHtml = res.viewers.length ? res.viewers.map(function(email){
+    return '<div class="os-row"><div class="os-name">' + escapeHtml(email) + '</div>' +
+      '<button type="button" class="btn btn-ghost danger" data-remove-viewer="' + escapeHtml(email) + '">Remove</button></div>';
+  }).join('') : '<p class="lx-hint">No Viewers yet -- add one below. Nobody outside the Super Admin/Viewer lists can open this org chart at all.</p>';
+
+  document.getElementById('wrap').innerHTML =
+    '<div class="outlet-head"><button class="btn btn-ghost" id="btn-back">&larr; All outlets</button>' +
+    '<h1>Manage Access</h1></div>' +
+    '<p class="lx-hint">Only the people below can open this org chart at all -- everyone else gets an "Access restricted" page, to keep employee photos and names private. Super Admins can also add/move/remove people, upload photos, and change Outlet Settings; Viewers can only browse.</p>' +
+    '<h3>Permanent Super Admins</h3><div class="os-table">' + permanentHtml + '</div>' +
+    '<h3 style="margin-top:20px;">Super Admins</h3><div class="os-table" id="managed-admin-list">' + managedHtml + '</div>' +
+    '<div class="field" style="margin-top:12px;max-width:420px;"><label>Add a Super Admin by email</label>' +
+    '<div style="display:flex;gap:8px;"><input type="email" id="new-admin-email" placeholder="name@company.com" style="flex:1;">' +
+    '<button type="button" class="btn btn-primary" id="btn-add-admin">Add</button></div>' +
+    '<span class="os-status" id="add-admin-status"></span></div>' +
+    '<h3 style="margin-top:28px;">Viewers</h3><div class="os-table" id="managed-viewer-list">' + viewersHtml + '</div>' +
+    '<div class="field" style="margin-top:12px;max-width:420px;"><label>Add a Viewer by email</label>' +
+    '<div style="display:flex;gap:8px;"><input type="email" id="new-viewer-email" placeholder="name@company.com" style="flex:1;">' +
+    '<button type="button" class="btn btn-primary" id="btn-add-viewer">Add</button></div>' +
+    '<span class="os-status" id="add-viewer-status"></span></div>';
+
+  document.getElementById('btn-back').onclick = goIndex;
+  document.getElementById('btn-add-admin').onclick = function(){
+    var input = document.getElementById('new-admin-email');
+    var email = input.value.trim();
+    var statusEl = document.getElementById('add-admin-status');
+    if(!email){ return; }
+    statusEl.textContent = 'Adding...';
+    google.script.run.withSuccessHandler(function(managed){
+      state.adminList.managed = managed;
+      input.value = '';
+      renderManageAccess();
+    }).withFailureHandler(function(err){
+      statusEl.textContent = 'Failed: ' + (err && err.message ? err.message : err);
+    }).apiAddAdminEmail(email);
+  };
+  document.querySelectorAll('[data-remove-admin]').forEach(function(btn){
+    btn.onclick = function(){
+      var email = btn.dataset.removeAdmin;
+      if(!confirm('Remove ' + email + ' as a Super Admin? They\'ll lose edit access -- and browsing too, unless they\'re also on the Viewer list.')) return;
+      google.script.run.withSuccessHandler(function(managed){
+        state.adminList.managed = managed;
+        renderManageAccess();
+      }).withFailureHandler(function(err){
+        alert('Could not remove: ' + (err && err.message ? err.message : err));
+      }).apiRemoveAdminEmail(email);
+    };
+  });
+  document.getElementById('btn-add-viewer').onclick = function(){
+    var input = document.getElementById('new-viewer-email');
+    var email = input.value.trim();
+    var statusEl = document.getElementById('add-viewer-status');
+    if(!email){ return; }
+    statusEl.textContent = 'Adding...';
+    google.script.run.withSuccessHandler(function(viewers){
+      state.adminList.viewers = viewers;
+      input.value = '';
+      renderManageAccess();
+    }).withFailureHandler(function(err){
+      statusEl.textContent = 'Failed: ' + (err && err.message ? err.message : err);
+    }).apiAddViewerEmail(email);
+  };
+  document.querySelectorAll('[data-remove-viewer]').forEach(function(btn){
+    btn.onclick = function(){
+      var email = btn.dataset.removeViewer;
+      if(!confirm('Remove ' + email + ' as a Viewer? They\'ll lose access to this org chart entirely, unless they\'re also a Super Admin.')) return;
+      google.script.run.withSuccessHandler(function(viewers){
+        state.adminList.viewers = viewers;
+        renderManageAccess();
+      }).withFailureHandler(function(err){
+        alert('Could not remove: ' + (err && err.message ? err.message : err));
+      }).apiRemoveViewerEmail(email);
+    };
+  });
+}
+
+// --- how to use this portal (admin) ---
+// Per Chris 2026-09-24 ("explain all the functions in details"). Pure
+// static content, client-side only -- no server call needed. Kept as one
+// long scrollable page (matching every other admin screen's structure)
+// rather than a multi-page wizard, since admins will mostly jump straight
+// to the one section they need via Cmd/Ctrl+F, not read it start to finish.
+function goHelp(){
+  state.view = 'help';
+  document.getElementById('wrap').innerHTML =
+    '<div class="outlet-head"><button class="btn btn-ghost" id="btn-back">&larr; All outlets</button>' +
+    '<h1>How to use this portal</h1></div>' +
+    HELP_CONTENT_HTML;
+  document.getElementById('btn-back').onclick = goIndex;
+}
+
+var HELP_CONTENT_HTML =
+  '<div class="help-content">' +
+
+  '<h3>The basics</h3>' +
+  '<p>The index page lists every outlet with at least one active person, plus three cross-outlet <b>Leadership</b> tiles (Singapore F&amp;B, Singapore Salon, Singapore Group Operations/Management). Click any tile to open that outlet or leadership page. Because this holds employee photos and names, only people on the Super Admin or Viewer list (see "Manage Access" below) can open it at all -- everyone else gets an "Access restricted" page. Viewers can browse everything; only Super Admins can edit.</p>' +
+
+  '<h3>Incoming Employees (admin)</h3>' +
+  '<p>This is a separate, read-only view of people whose <b>full-time onboarding is still in progress</b>. They are not inserted into the active org chart or the Mastersheet early. The page reads MT Onboarding first, followed by the three FT industry lists -- SG F&amp;B, SG Beauty, and SG Office HQ.</p>' +
+  '<p>Within each industry, <b>Management Trainees appear first</b> so they are easy to show management. Everyone else is sorted by position, then name. Each card shows the ClickUp onboarding status, intended outlet/department, join date, and a photo when the employee\'s full name matches column B of the Application Form response sheet and a photo is available in column BP. The portal only reads that sheet; it never changes the application response.</p>' +
+  '<p>This view is admin-only because it contains applicant information before the person has officially joined. Use its own Refresh button to fetch the latest ClickUp onboarding records.</p>' +
+  '<p>If a photo didn\'t auto-match (a name spelled differently on the Application Form, or no submission at all), use that card\'s own "&#8943;" menu to upload one by hand, or clear a manually-uploaded one to fall back to auto-match again. Manual uploads are stored privately in Drive, never publicly shared -- same as every other photo in this app.</p>' +
+
+  '<p>Every outlet page has up to 3 layers:</p>' +
+  '<ul>' +
+  '<li><b>Layer 1 -- Area Manager / GM.</b> Cross-outlet oversight. For F&amp;B and Salon outlets, this is a live MIRROR of that scheme\'s Leadership page (edit it there, not on the outlet -- unless the outlet has opted out via Outlet Settings\' "Manage Layer 1 separately").</li>' +
+  '<li><b>Layer 2 -- Outlet In-Charge.</b> Runs that outlet day to day. Editable directly on the outlet\'s own page.</li>' +
+  '<li><b>Layer 3 -- Ground Team.</b> Everyone else. Auto-populated from the Mastersheet the first time an outlet is opened, and kept in sync automatically after that (see "Keeping in sync" below).</li>' +
+  '</ul>' +
+  '<p>Depending on the outlet\'s Role Scheme, Layer 3 (and sometimes Layer 2) is split into side-by-side columns -- FOH/BOH for F&amp;B, Service Provider/Reception for Salon, Executive/Junior for Office, or one column per department for "By Department" outlets. Anyone who doesn\'t clearly fit a column lands in "Unsorted" for a human to sort by hand via their card\'s "&#8943;" menu.</p>' +
+
+  '<h3>Every person card</h3>' +
+  '<p>Click a photo to open it full-size. Click the "&#8943;" menu on a card for:</p>' +
+  '<ul>' +
+  '<li><b>Upload / Clear photo</b> -- stored in their P-file\'s "04. PERSONAL INFORMATION" folder (Mastersheet people) or a shared Drive folder (manually-added people), and mirrored into the Mastersheet\'s own photo column.</li>' +
+  '<li><b>Move to Layer 2 / Layer 3</b> -- re-tier them on this outlet without removing and re-adding.</li>' +
+  '<li><b>Mark as ...</b> -- set their role-tag column (FOH/BOH, department, etc.) by hand when auto-classification couldn\'t.</li>' +
+  '<li><b>Remove from this outlet</b> -- removes just this one placement. Their Mastersheet record (if any) is untouched, and they can still be showing on other outlets/leadership pages.</li>' +
+  '<li><b>Delete this person</b> -- manually-added profiles only (no Mastersheet record to fall back to). Removes them everywhere, not just this card. Cannot be undone from within the org chart.</li>' +
+  '</ul>' +
+  '<p>"+ Add" on any layer either searches existing people (Mastersheet employees + already-added manual profiles) or creates a brand-new manual profile -- for people tracked in a different Mastersheet Chris doesn\'t have access to (e.g. some top management).</p>' +
+
+  '<h3>Keeping in sync</h3>' +
+  '<p>Every time the index, an outlet, or a leadership page loads, the org chart automatically: (1) moves anyone whose Mastersheet LOCATION changed to their new outlet, and (2) adds anyone with no placement at their current outlet yet (a new hire, or someone who was only ever added to a Leadership page). When either happens, a green "&#10003;" banner appears at the top naming exactly who changed -- so nothing happens silently. It auto-dismisses after 15s.</p>' +
+  '<p>The employee roster is cached for a few minutes so the app stays fast -- if you just edited the Mastersheet directly and want the org chart to see it <i>right now</i>, click <b>Refresh</b> (top of the index page) rather than waiting.</p>' +
+
+  '<h3>Outlet Settings (admin)</h3>' +
+  '<p>Assign each outlet\'s Role Scheme by hand instead of relying on auto-detection (which can misclassify a back-office or salon outlet as F&amp;B). An outlet with no explicit setting shows "auto" and keeps auto-detecting -- a brand-new outlet is never left unclassified. Choosing "By Department" reveals a departments field (comma-separated) that becomes that outlet\'s own Layer 2/3 columns. F&amp;B/Salon outlets also get a "Manage Layer 1 separately" checkbox to opt out of the Leadership-page mirror when they need a different manager than the rest of that scheme.</p>' +
+
+  '<h3>Manage Access (admin)</h3>' +
+  '<p>Two tiers, and nobody outside either one can open this org chart at all: <b>Super Admin</b> can make changes (add/move/remove people, upload photos, Outlet Settings, Manage Access itself); <b>Viewer</b> can only browse. The "Permanent Super Admin" list is hardcoded in the code itself and can only be changed by editing Config.js and redeploying -- a deliberate safety net so edit access can never be accidentally emptied out from inside the app. Everyone else goes through this screen. Removing someone from Super Admins only removes their ability to edit -- they keep browsing if they\'re also a Viewer; removing them from Viewers (and they\'re not a Super Admin) removes their access entirely.</p>' +
+
+  '<h3>Other admin tools</h3>' +
+  '<ul>' +
+  '<li><b>Find duplicate profiles</b> -- finds manually-added people who share the same name (usually an accidental double-add).</li>' +
+  '<li><b>Repair wrong photos</b> -- clears any saved photo that doesn\'t actually look like a photo file (e.g. an ID/passport scan picked up by mistake). Cleared people get their correct photo back automatically next time their card loads.</li>' +
+  '<li><b>Clean up duplicate photos</b> -- trashes leftover duplicate photo files from repeated uploads. Never touches whichever photo is actually in use, and trashed files go to Drive Trash, not a permanent delete.</li>' +
+  '<li><b>Bulk import photos</b> -- select several photos at once; each filename must contain the person\'s Employee ID (e.g. "Ivy SGFT0531.jpeg"). Uploads into their P-file and the Mastersheet\'s photo column in one go.</li>' +
+  '<li><b>Scan P-files for existing photos</b> -- paste full names; for each match, finds a photo already sitting in their P-file and pushes it into the Mastersheet\'s photo column without uploading anything new.</li>' +
+  '</ul>' +
+
+  '</div>';
+
+/** Reloads whatever's currently on screen after an Add/Move/Remove/role-tag change -- one place so every action doesn't need to know which view it's in. */
+function reloadCurrentView(){
+  if(state.view === 'leadership'){ goLeadership(state.leadershipKind); }
+  else if(state.view === 'incoming'){ goIncomingEmployees(); }
+  else if(state.view === 'outlet' && state.currentOutlet){ goOutlet(state.currentOutlet); }
+  else { goIndex(); }
+}
+
+/** Bypasses the roster cache (normally ~3 min TTL) for an immediate re-read straight from the Mastersheet, then reloads whatever's currently on screen. */
+function hardRefresh(){
+  showBoot('Refreshing from the Mastersheet...');
+  google.script.run.withSuccessHandler(function(){
+    reloadCurrentView();
+  }).withFailureHandler(function(err){ showBoot('Could not refresh: ' + (err && err.message ? err.message : err)); }).apiRefreshData();
+}
+
+// --- index view ---
+var LEADERSHIP_TILES = [
+  { kind: 'fnb', title: 'Singapore F&B Leadership', sub: 'Cross-outlet F&B leadership overview' },
+  { kind: 'salon', title: 'Singapore Salon Leadership', sub: 'Cross-outlet salon leadership overview' },
+  { kind: 'groupops', title: 'Singapore Group Operations/Management Leadership', sub: 'Group-wide leadership by department' },
+];
+function renderIndex(){
+  var q = (document.getElementById('outlet-search') ? document.getElementById('outlet-search').value : '').trim().toLowerCase();
+  // Outlets with 0 currently-active people are treated as no-longer-operating
+  // (e.g. Remote, Photopia OC, Photomatic Funan) -- per Chris 2026-09-23,
+  // hidden from the dashboard entirely rather than shown as an empty tile.
+  // Still reachable directly via "+ Add outlet" if ever needed.
+  var list = state.outlets.filter(function(o){ return o.activeCount > 0 && (!q || o.name.toLowerCase().indexOf(q) !== -1); });
+  var tiles = list.map(function(o){
+    return '<button class="outlet-tile" data-outlet="' + escapeHtml(o.name) + '"><h3>' + escapeHtml(o.name) + '</h3><span>' + o.activeCount + (o.activeCount===1?' person':' people') + '</span></button>';
+  }).join('');
+  var leadershipTiles = LEADERSHIP_TILES.map(function(t){
+    return '<button class="outlet-tile leadership-tile" data-leadership-kind="' + escapeHtml(t.kind) + '"><h3>&#9733; ' + escapeHtml(t.title) + '</h3><span>' + escapeHtml(t.sub) + '</span></button>';
+  }).join('');
+  if(state.isAdmin){
+    leadershipTiles += '<button class="outlet-tile incoming-tile" id="btn-incoming-employees"><h3>&#128101; Incoming Employees</h3><span>Full-time onboarding · Management Trainees first</span></button>';
+  }
+
+  // Admin-only tools -- hidden for anyone not on CONFIG.ORG_CHART_ADMIN_EMAILS
+  // (added 2026-09-23; see requireAdmin_() server-side for the actual
+  // enforcement -- this is just so non-admins aren't shown controls they
+  // can't use). Viewing/browsing outlets stays available to everyone either way.
+  var adminToolsHtml = !state.isAdmin ? '' :
+    '<button class="btn btn-ghost" id="btn-find-duplicates" title="Temporary: find manually-added people who share the same name">&#128269; Find duplicate profiles</button>' +
+    '<button class="btn btn-ghost" id="btn-repair-photos" title="Temporary: clears any photo that was wrongly matched to an ID/passport scan or other non-photo file during the @52 P-file photo bug">&#128295; Repair wrong photos</button>' +
+    '<button class="btn btn-ghost" id="btn-cleanup-dupes" title="Temporary: trashes duplicate Org Chart Photo files left behind by repeated uploads/migrations -- never touches the photo actually in use">&#128465; Clean up duplicate photos</button>' +
+    '<button class="btn btn-ghost" id="btn-bulk-import-photos" title="Temporary: bulk-upload photos (filenames must contain the Employee ID) into each person\'s P-file and the Mastersheet photo column">&#128228; Bulk import photos</button>' +
+    '<button class="btn btn-ghost" id="btn-scan-pfile-photos" title="Temporary: paste full names -- finds any photo already sitting in their P-file and pushes it into the Mastersheet photo column, without uploading anything new">&#128269; Scan P-files for existing photos</button>' +
+    '<button class="btn btn-ghost" id="btn-outlet-settings" title="Assign each outlet\'s Role Scheme by hand instead of relying only on auto-detection">&#9881;&#65039; Outlet Settings</button>' +
+    '<button class="btn btn-ghost" id="btn-manage-access" title="Add or remove who can edit the org chart">&#128274; Manage Access</button>' +
+    '<button class="btn btn-ghost" id="btn-help" title="What every button and screen does">&#128218; How to use this portal</button>';
+
+  document.getElementById('wrap').innerHTML =
+    '<div class="masthead"><div><p class="eyebrow">Initia Group</p><h1>Org Chart</h1>' +
+    '<p class="sub">Pick an outlet to see its own reporting chart.</p></div></div>' +
+    '<div class="leadership-tile-grid">' + leadershipTiles + '</div>' +
+    '<div class="toolbar"><input type="search" id="outlet-search" placeholder="Search outlets..." value="' + escapeHtml(q) + '">' +
+    '<div class="spacer"></div>' + adminToolsHtml +
+    '<button class="btn btn-ghost" id="btn-refresh" title="Roster data is cached for a few minutes -- use this to see a Mastersheet edit immediately">&#8635; Refresh</button>' +
+    (state.isAdmin ? '<button class="btn btn-primary" id="btn-add-outlet">+ Add outlet</button>' : '') + '</div>' +
+    (list.length ? '<div class="outlet-grid">' + tiles + '</div>' : '<div class="empty"><b>No outlets yet</b>Click "+ Add outlet" to create the first one.</div>');
+
+  document.getElementById('outlet-search').addEventListener('input', renderIndex);
+  document.getElementById('outlet-search').focus();
+  document.getElementById('outlet-search').setSelectionRange(q.length, q.length);
+  document.getElementById('btn-refresh').onclick = hardRefresh;
+  if(state.isAdmin) wireAdminToolButtons();
+  document.querySelectorAll('[data-leadership-kind]').forEach(function(t){
+    t.onclick = function(){ goLeadership(t.dataset.leadershipKind); };
+  });
+  if(state.isAdmin){
+    document.getElementById('btn-add-outlet').onclick = function(){
+      var name = prompt('New outlet name:');
+      if(name && name.trim()) goOutlet(name.trim());
+    };
+  }
+  document.querySelectorAll('.outlet-tile[data-outlet]').forEach(function(t){
+    t.onclick = function(){ goOutlet(t.dataset.outlet); };
+  });
+}
+
+function wireAdminToolButtons(){
+  document.getElementById('btn-incoming-employees').onclick = goIncomingEmployees;
+  document.getElementById('btn-find-duplicates').onclick = goDuplicates;
+  document.getElementById('btn-repair-photos').onclick = function(){
+    if(!confirm('Scan every saved photo and clear any that don\'t actually look like a photo file (e.g. an IC/passport scan picked up by the @52 bug)?\n\nThis only clears the reference -- nothing is deleted, and cleared people will get their correct photo back automatically next time their card loads.')) return;
+    this.disabled = true; this.textContent = 'Scanning...';
+    var btn = this;
+    google.script.run.withSuccessHandler(function(res){
+      btn.disabled = false; btn.textContent = '\u{1F527} Repair wrong photos';
+      alert('Checked ' + res.checked + ' saved photos.\nCleared ' + res.cleared + ' that didn\'t look right' + (res.cleared ? ':\n\n' + res.names.join('\n') : '.') + (res.unverified ? '\n\n(' + res.unverified + ' could not be verified and were left alone.)' : ''));
+      // reloadCurrentView, not hardRefresh -- per Chris 2026-09-23 ("it will
+      // keep refreshing... not seamless"): hardRefresh's apiRefreshData()
+      // call was redundant here, this tool already invalidates the one cache
+      // it actually touches (invalidatePeopleMapCache_, server-side) itself,
+      // so the extra full cache-nuke + its own "Refreshing from the
+      // Mastersheet..." interstitial was just a second, pointless full reload
+      // stacked on top of the one reloadCurrentView already does.
+      if(res.cleared) reloadCurrentView();
+    }).withFailureHandler(function(err){
+      btn.disabled = false; btn.textContent = '\u{1F527} Repair wrong photos';
+      alert('Could not repair: ' + (err && err.message ? err.message : err));
+    }).apiRepairWrongPfilePhotos();
+  };
+  document.getElementById('btn-cleanup-dupes').onclick = function(){
+    if(!confirm('Scan every P-file (and the shared manual-photos folder) for duplicate "Org Chart Photo" files and trash the extras?\n\nEach person\'s CURRENTLY-USED photo is never touched -- only leftover duplicates. Trashed files go to Drive Trash, not permanently deleted, so this is recoverable.')) return;
+    this.disabled = true; this.textContent = 'Scanning...';
+    var btn = this;
+    google.script.run.withSuccessHandler(function(res){
+      btn.disabled = false; btn.textContent = '\u{1F5D1}️ Clean up duplicate photos';
+      alert('Scanned ' + res.scanned + ' P-files.\nFound ' + res.found + ' duplicate photo files, trashed ' + res.trashed + '.' + (res.names.length ? '\n\n' + res.names.join('\n') : ''));
+    }).withFailureHandler(function(err){
+      btn.disabled = false; btn.textContent = '\u{1F5D1}️ Clean up duplicate photos';
+      alert('Could not clean up: ' + (err && err.message ? err.message : err));
+    }).apiCleanupDuplicateOrgChartPhotos();
+  };
+  document.getElementById('btn-bulk-import-photos').onclick = openBulkImportPhotosModal;
+  document.getElementById('btn-scan-pfile-photos').onclick = openScanPfilePhotosModal;
+  document.getElementById('btn-outlet-settings').onclick = goOutletSettings;
+  document.getElementById('btn-manage-access').onclick = goManageAccess;
+  document.getElementById('btn-help').onclick = goHelp;
+}
+
+// --- duplicate profiles finder (TEMPORARY, 2026-09-19 -- see apiFindDuplicateManualProfiles) ---
+function goDuplicates(){
+  state.view = 'duplicates';
+  showBoot('Scanning for duplicate profiles...');
+  google.script.run.withSuccessHandler(function(groups){
+    state.duplicateGroups = groups;
+    renderDuplicates();
+  }).withFailureHandler(function(err){ showBoot('Could not scan: ' + (err && err.message ? err.message : err)); }).apiFindDuplicateManualProfiles();
+}
+
+function renderDuplicates(){
+  var groups = state.duplicateGroups || [];
+  var groupsHtml = groups.map(function(group){
+    var cards = group.map(function(p){
+      return '<div class="dup-card">' +
+        '<div class="avatar-sm" data-avatar-for="' + escapeHtml(p.id) + '">' + initials(p.name) + '</div>' +
+        '<div class="dup-name">' + escapeHtml(p.name) + (p.nickname ? ' “' + escapeHtml(p.nickname) + '”' : '') + '</div>' +
+        '<div class="dup-pos">' + escapeHtml(p.position) + '</div>' +
+        '<div class="dup-placements">' + (p.placements.length ? escapeHtml(p.placements.join(', ')) : 'Not placed anywhere') + '</div>' +
+        '<button class="btn btn-ghost btn-small danger" data-delete-id="' + escapeHtml(p.id) + '">Delete this one</button>' +
+        '</div>';
+    }).join('');
+    return '<div class="dup-group"><h3>' + escapeHtml(group[0].name) + ' (' + group.length + ' copies)</h3><div class="dup-cards">' + cards + '</div></div>';
+  }).join('');
+
+  document.getElementById('wrap').innerHTML =
+    '<div class="outlet-head"><button class="btn btn-ghost" id="btn-back">&larr; All outlets</button>' +
+    '<h1>Duplicate Profiles</h1>' +
+    '<button class="btn btn-ghost" id="btn-rescan">&#8635; Re-scan</button></div>' +
+    (groups.length ? groupsHtml : '<div class="empty"><b>No duplicates found</b>Every manually-added name is unique.</div>');
+
+  document.getElementById('btn-back').onclick = goIndex;
+  document.getElementById('btn-rescan').onclick = goDuplicates;
+  document.querySelectorAll('[data-delete-id]').forEach(function(btn){
+    btn.onclick = function(){
+      var id = btn.dataset.deleteId;
+      if(!confirm('Delete this profile completely? This removes them from every outlet/leadership page and deletes their photo. This cannot be undone from within the org chart.')) return;
+      btn.disabled = true; btn.textContent = 'Deleting...';
+      google.script.run.withSuccessHandler(function(){
+        goDuplicates(); // re-scan so remaining group sizes stay accurate
+      }).withFailureHandler(function(err){
+        btn.disabled = false; btn.textContent = 'Delete this one';
+        alert('Could not delete: ' + (err && err.message ? err.message : err));
+      }).apiDeletePerson(id);
+    };
+  });
+
+  // Simple upfront batch fetch -- this is a small, temporary view, no need for the full lazy-load/IntersectionObserver machinery.
+  var ids = [];
+  groups.forEach(function(group){ group.forEach(function(p){ if(p.hasPhoto) ids.push(p.id); }); });
+  if(ids.length){
+    google.script.run.withSuccessHandler(function(map){
+      ids.forEach(function(id){
+        var res = map && map[id];
+        if(!res || !res.dataUrl) return;
+        document.querySelectorAll('[data-avatar-for="' + id + '"]').forEach(function(el){ setAvatarImg(el, res.dataUrl); });
+      });
+    }).apiGetPhotoDataUrls(ids);
+  }
+}
+
+// --- outlet detail view ---
+function renderOutlet(){
+  var d = state.detail;
+  var labels = d.layerLabels;
+  var layer1Derived = d.layer1Source === 'leadership';
+  var layer1Hint = layer1Derived ? ('Always follows ' + d.layer1SourceTitle + ' -- edit it there, not here') : 'Oversees this outlet';
+  // "department" outlets (Initia Management, Initia International) nest
+  // Layer 2 (Department Lead) INSIDE each department column instead of one
+  // flat band above them -- per Chris 2026-09-23 ("for department lead, it
+  // should be under each department... department lead, full time, part
+  // time"). Every other scheme keeps the original separate Layer 2 band +
+  // Layer 3 section untouched.
+  var isDepartmentScheme = d.roleScheme === 'department';
+  document.getElementById('wrap').innerHTML =
+    '<div class="outlet-head"><button class="btn btn-ghost" id="btn-back">&larr; All outlets</button>' +
+    '<h1>' + escapeHtml(d.outlet) + '</h1>' +
+    '<button class="btn btn-ghost" id="btn-refresh" title="Roster data is cached for a few minutes -- use this to see a Mastersheet edit immediately">&#8635; Refresh</button></div>' +
+    renderLayerSection(1, labels.layer1, layer1Hint, d.layer1, null, layer1Derived) +
+    (isDepartmentScheme
+      ? renderDepartmentSections(d.layer2, d.layer3, d.roleTagOptions, labels.layer3, labels.layer2)
+      : renderLayerSection(2, labels.layer2, 'Runs this outlet day to day', d.layer2, null) +
+        (d.layer3Mode === 'flat' ? renderLayerSection(3, labels.layer3, 'Everyone at this outlet', d.layer3, null) : renderLayer3Section(d.layer3, d.roleTagOptions, labels.layer3)));
+
+  document.getElementById('btn-back').onclick = goIndex;
+  document.getElementById('btn-refresh').onclick = hardRefresh;
+  wireCardActions();
+}
+
+/**
+ * Department-scheme outlets: each department gets its own column with a
+ * "Department Lead" (Layer 2, tagged by department via the same
+ * layer2RoleTagOptions/"⋯" menu mechanism fnb/salon already use) sub-group
+ * ABOVE its Full-Time/Part-Time Layer 3 staff -- per Chris 2026-09-23.
+ */
+function renderDepartmentSections(layer2, layer3, departmentList, sectionLabel, layer2Label){
+  var byTag2 = {}, byTag3 = {};
+  layer2.forEach(function(p){ var t = p.roleTag || ''; (byTag2[t] = byTag2[t] || []).push(p); });
+  layer3.forEach(function(p){ var t = p.roleTag || ''; (byTag3[t] = byTag3[t] || []).push(p); });
+  var order = departmentList.concat(['']);
+  var cols = order.filter(function(tag){
+    return tag !== '' || ((byTag2[''] && byTag2[''].length) || (byTag3[''] && byTag3[''].length));
+  }).map(function(tag){
+    var leads = byTag2[tag] || [];
+    var staff = byTag3[tag] || [];
+    var label = tag === '' ? 'Unsorted' : tag;
+    var cls = 'role-col' + (tag === '' ? ' unsorted' : '');
+    var leadCards = leads.map(function(p){ return renderGridCard(p, 2); }).join('');
+    var leadHtml = '<div class="status-group"><div class="status-label">' + escapeHtml(layer2Label) + ' (' + leads.length + ')</div>' +
+      '<div class="gcardgrid">' + leadCards + renderAddTile(2, tag) + '</div></div>';
+    var staffHtml = renderPeopleByEmploymentStatus(staff);
+    return '<div class="' + cls + '"><h4>' + escapeHtml(label) + ' (' + (leads.length + staff.length) + ')</h4>' +
+      leadHtml + staffHtml + '<div class="gcardgrid">' + renderAddTile(3, tag) + '</div></div>';
+  }).join('');
+  var hint = 'Split by department (' + departmentList.length + ')';
+  return '<section class="layer"><div class="layer-head"><h2>' + escapeHtml(sectionLabel) + '</h2><span class="layer-hint">' + escapeHtml(hint) + '</span></div>' +
+    '<div class="layer-band l3"><div class="role-columns">' + cols + '</div></div></section>';
+}
+
+// --- leadership overview (not a real outlet -- see LEADERSHIP_OVERVIEW_OUTLET_NAME server-side) ---
+function renderLeadership(){
+  var d = state.detail;
+  var labels = d.layerLabels;
+  var groupedByTag = d.rollupGroupBy === 'roleTag';
+  var leadsHtml = (d.outletLeads || []).map(function(o){
+    var chips = o.people.map(renderLeadChip).join('');
+    var heading = groupedByTag ? ('<h4>' + escapeHtml(o.outlet) + '</h4>') : ('<h4 class="outlet-lead-link" data-outlet="' + escapeHtml(o.outlet) + '">' + escapeHtml(o.outlet) + '</h4>');
+    return '<div class="outlet-lead-box">' + heading + '<div class="outlet-lead-chips">' + chips + '</div></div>';
+  }).join('');
+
+  document.getElementById('wrap').innerHTML =
+    '<div class="outlet-head"><button class="btn btn-ghost" id="btn-back">&larr; All outlets</button>' +
+    '<h1>' + escapeHtml(d.title) + '</h1>' +
+    '<button class="btn btn-ghost" id="btn-refresh" title="Roster data is cached for a few minutes -- use this to see a Mastersheet edit immediately">&#8635; Refresh</button></div>' +
+    (d.showTiers ? (d.layer1RoleTagOptions && d.layer1RoleTagOptions.length
+      ? renderLayer3Section(d.layer1, d.layer1RoleTagOptions, labels.layer1, 1)
+      : renderLayerSection(1, labels.layer1, 'Cross-outlet oversight', d.layer1, null)) : '') +
+    (d.showTiers ? renderLayerSection(2, labels.layer2, 'Regional leads across outlets', d.layer2, null) : '') +
+    (d.layer3Mode === 'split' ? renderLayer3Section(d.layer3, d.roleTagOptions, labels.layer3) :
+      d.layer3Mode === 'flat' ? renderLayerSection(3, labels.layer3, 'People leadership across outlets', d.layer3, null) : '') +
+    (d.outletLeads ? '<section class="layer"><div class="layer-head"><h2 class="outlet-leads-head">Outlet In-Charge Leads</h2>' +
+      '<span class="layer-hint">' + (groupedByTag ? ('Split by each outlet’s own ' + escapeHtml(d.roleTagOptions.join(' / ')) + ' tag') : 'Always follows each outlet’s own Outlet In-Charge') + ' -- edit it on that outlet’s page, not here</span></div>' +
+      '<div class="outlet-leads-grid">' + (leadsHtml || '<span class="layer-hint">None yet.</span>') + '</div></section>' : '');
+
+  document.getElementById('btn-back').onclick = goIndex;
+  document.getElementById('btn-refresh').onclick = hardRefresh;
+  document.querySelectorAll('.outlet-lead-link').forEach(function(h){
+    h.onclick = function(){ goOutlet(h.dataset.outlet); };
+  });
+  wireCardActions();
+}
+
+/** A compact, read-only avatar+name chip for the outlet-leads rollup -- no menu, no click-to-manage, since this section only ever mirrors each outlet's own Layer 2. */
+function renderLeadChip(p){
+  return '<div class="lead-chip">' +
+    '<div class="avatar-sm" data-avatar-for="' + escapeHtml(p.id) + '">' + initials(p.name) + '</div>' +
+    '<div class="lead-name">' + escapeHtml(p.name) + '</div>' +
+    (p.outletLabel ? '<div class="lead-outlet">' + escapeHtml(p.outletLabel) + '</div>' : '') + '</div>';
+}
+
+function renderLayerSection(layerNum, title, hint, people, roleFilter, hideAdd){
+  var cards = people.map(function(p){ return renderGridCard(p, layerNum); }).join('');
+  var addTile = hideAdd ? '' : renderAddTile(layerNum, null);
+  return '<section class="layer"><div class="layer-head"><h2>' + escapeHtml(title) + '</h2><span class="layer-hint">' + escapeHtml(hint) + '</span></div>' +
+    '<div class="layer-band l' + layerNum + '"><div class="gcardgrid">' + cards + addTile + '</div></div></section>';
+}
+
+// Order matters: Full-Time first, Part-Time below, matching what Chris asked for.
+var EMPLOYMENT_STATUS_GROUPS = ['Full-Time', 'Part-Time', 'Intern', 'Freelance', 'Other'];
+function employmentStatusGroup(employmentType){
+  var t = String(employmentType || '').trim().toUpperCase();
+  if(t === 'F/T') return 'Full-Time';
+  if(t === 'P/T' || t === 'PT ADMIN') return 'Part-Time';
+  if(t.indexOf('INTERN') !== -1) return 'Intern';
+  if(t === 'FREELANCE') return 'Freelance'; // per Chris 2026-09-19 -- its own group, not lumped into "Other"
+  return 'Other'; // manual profiles (no Mastersheet status), or anything unexpected
+}
+
+/** Cards within one role-tag column, grouped Full-Time first then Part-Time (etc.), each with its own small header -- Chris asked to see the split at a glance, not just alphabetical. layerNum defaults to 3 (the original/only caller); passed through explicitly wherever this is reused for a different layer (e.g. Layer 1 tagging on a leadership page). */
+function renderPeopleByEmploymentStatus(people, layerNum){
+  layerNum = layerNum || 3;
+  var byGroup = {};
+  people.forEach(function(p){ var g = employmentStatusGroup(p.employmentType); (byGroup[g] = byGroup[g] || []).push(p); });
+  return EMPLOYMENT_STATUS_GROUPS.filter(function(g){ return byGroup[g] && byGroup[g].length; }).map(function(g){
+    var cards = byGroup[g].map(function(p){ return renderGridCard(p, layerNum); }).join('');
+    return '<div class="status-group"><div class="status-label">' + escapeHtml(g) + ' (' + byGroup[g].length + ')</div>' +
+      '<div class="gcardgrid">' + cards + '</div></div>';
+  }).join('');
+}
+
+/** Grouped-by-tag columns -- originally Layer 3 only (FOH/BOH, departments, etc.), reused for Layer 1 tagging (e.g. F&B Operations Management split into F&B/Dessert) via the optional layerNum param. */
+function renderLayer3Section(people, roleTagOptions, sectionLabel, layerNum){
+  layerNum = layerNum || 3;
+  var byTag = {};
+  people.forEach(function(p){ var t = p.roleTag || ''; (byTag[t] = byTag[t] || []).push(p); });
+  var order = roleTagOptions.concat(['']); // e.g. ['FOH','BOH'], ['Service Provider','Reception'], or ['Executive','Junior'], then Unsorted
+  var cols = order.filter(function(tag){ return tag !== '' || (byTag[''] && byTag[''].length); }).map(function(tag){
+    var list = byTag[tag] || [];
+    var groupedCards = renderPeopleByEmploymentStatus(list, layerNum);
+    var addTile = renderAddTile(layerNum, tag);
+    var cls = 'role-col' + (tag === '' ? ' unsorted' : '');
+    var label = tag === '' ? 'Unsorted' : tag;
+    return '<div class="' + cls + '"><h4>' + escapeHtml(label) + ' (' + list.length + ')</h4>' + groupedCards +
+      '<div class="gcardgrid">' + addTile + '</div></div>';
+  }).join('');
+  var hint = roleTagOptions.length > 4 ? ('Split by department (' + roleTagOptions.length + ')') : ('Split by ' + roleTagOptions.join(' / '));
+  return '<section class="layer"><div class="layer-head"><h2>' + escapeHtml(sectionLabel) + '</h2><span class="layer-hint">' + escapeHtml(hint) + '</span></div>' +
+    '<div class="layer-band l3"><div class="role-columns">' + cols + '</div></div></section>';
+}
+
+function renderAddTile(layer, roleTagHint){
+  if(!state.isAdmin) return '';
+  return '<div class="add-tile-wrap"><button class="add-tile" data-action="add" data-layer="' + layer + '" data-role="' + escapeHtml(roleTagHint||'') + '">+</button><span class="lbl">Add</span></div>';
+}
+
+function renderGridCard(p, layerNum){
+  var resigned = p.status === 'resigned';
+  return '<div class="gcard' + (resigned?' resigned':'') + (p.resigningSoon?' resigning-soon':'') + '" data-id="' + escapeHtml(p.id) + '">' +
+    (state.isAdmin ? '<button class="gmenu-btn" data-action="menu" data-id="' + escapeHtml(p.id) + '" data-layer="' + layerNum + '">⋯</button>' : '') +
+    '<div class="avatar-lg" data-avatar-for="' + escapeHtml(p.id) + '" data-action="lightbox" data-id="' + escapeHtml(p.id) + '">' + initials(p.name) + '</div>' +
+    '<div class="gname">' + escapeHtml(p.name) + '</div>' +
+    (p.nickname ? '<span class="gnick">“' + escapeHtml(p.nickname) + '”</span>' : '') +
+    '<div class="gpos">' + escapeHtml(p.position) + '</div>' +
+    (layerNum === 2 && p.roleTag ? '<div class="grole">' + escapeHtml(p.roleTag) + '</div>' : '') +
+    (p.source === 'manual' ? '<div class="gsource">Manually added</div>' : '') +
+    (resigned ? '<span class="badge">Resigned</span>' : '') +
+    (p.resigningSoon && p.lastWorkingDay ? '<div class="lwd-note">Last day ' + escapeHtml(p.lastWorkingDay) + '</div>' : '') +
+    '</div>';
+}
+
+function closePopovers(){ document.querySelectorAll('.menu').forEach(function(m){ m.remove(); }); state.menuOpenId = null; }
+document.addEventListener('click', closePopovers);
+
+function wireCardActions(){
+  document.querySelectorAll('[data-action="add"]').forEach(function(btn){
+    btn.onclick = function(ev){ ev.stopPropagation(); openAddModal(Number(btn.dataset.layer), btn.dataset.role || ''); };
+  });
+  document.querySelectorAll('[data-action="lightbox"]').forEach(function(el){
+    el.onclick = function(ev){ ev.stopPropagation(); openLightbox(findPerson(el.dataset.id)); };
+  });
+  document.querySelectorAll('[data-action="menu"]').forEach(function(btn){
+    btn.onclick = function(ev){
+      ev.stopPropagation();
+      var id = btn.dataset.id, layer = Number(btn.dataset.layer);
+      if(state.menuOpenId === id){ closePopovers(); return; }
+      closePopovers(); state.menuOpenId = id;
+      var p = findPerson(id);
+      // A Layer 1 card on a normal fnb/salon outlet page is a read-only
+      // mirror of that outlet's Leadership page (see layer1Source
+      // server-side) -- Move/Remove/Delete would silently do nothing useful
+      // here (there's no placement against THIS outlet to act on), so only
+      // "Upload photo" (a per-person attribute, harmless from anywhere) is
+      // offered; editing happens on the Leadership page itself.
+      var isDerivedLayer1 = layer === 1 && state.view === 'outlet' && state.detail.layer1Source === 'leadership';
+      var moveItems = isDerivedLayer1 ? '' : [1,2,3].filter(function(l){ return l !== layer; }).map(function(l){
+        return '<button data-act="move" data-layer="' + l + '">Move to Layer ' + l + '</button>';
+      }).join('');
+      // Layer 3 uses the outlet's ground-team scheme (FOH/BOH etc.); Layer 2
+      // only gets tag options on salon outlets, where the Outlet In-Charge
+      // is tagged Reception Lead/Service Provider Lead for the Salon
+      // Leadership overview's rollup (see layer2RoleTagOptions server-side).
+      var roleTagChoices = isDerivedLayer1 ? null : (layer === 3 ? state.detail.roleTagOptions : (layer === 2 ? state.detail.layer2RoleTagOptions : (layer === 1 ? state.detail.layer1RoleTagOptions : null)));
+      var roleItems = '';
+      if(roleTagChoices && roleTagChoices.length){
+        roleItems = '<div class="menu-label">Role</div>' + roleTagChoices.filter(function(t){ return t !== (p.roleTag||''); }).map(function(t){
+          return '<button data-act="role" data-role="' + escapeHtml(t) + '">Mark as ' + escapeHtml(t) + '</button>';
+        }).join('');
+      }
+      // Deleting the whole profile only makes sense for a manually-added
+      // person -- a Mastersheet-sourced person's facts live in the
+      // Mastersheet, not here, so "Remove from this outlet" (one placement)
+      // is as far as this app can ever go for them.
+      var deleteItem = (!isDerivedLayer1 && p.source === 'manual') ? '<button data-act="delete" class="danger">Delete this person</button>' : '';
+      var removeItem = isDerivedLayer1 ? '' : ('<div class="menu-label"></div><button data-act="remove" class="danger">Remove from this outlet</button>');
+      // "Clear photo" only when there's actually one showing -- covers a
+      // photo turning out to be flat-out wrong (e.g. someone else's face),
+      // not just wanting to replace it with a better one.
+      var clearPhotoItem = p.hasPhoto ? '<button data-act="clearphoto">Clear photo</button>' : '';
+      var menu = document.createElement('div'); menu.className = 'menu';
+      menu.innerHTML = '<button data-act="photo">Upload photo</button>' + clearPhotoItem + (moveItems ? '<div class="menu-label">Move</div>' + moveItems : '') + roleItems + removeItem + deleteItem;
+      btn.parentElement.appendChild(menu);
+      menu.querySelector('[data-act="photo"]').onclick = function(){ closePopovers(); openPhotoModal(p); };
+      if(clearPhotoItem){
+        menu.querySelector('[data-act="clearphoto"]').onclick = function(){
+          closePopovers();
+          if(!confirm('Clear ' + p.name + '’s photo? They’ll show initials again until a new one is uploaded.')) return;
+          google.script.run.withSuccessHandler(function(){
+            p.hasPhoto = false;
+            document.querySelectorAll('[data-avatar-for="' + id + '"]').forEach(function(el){ el.innerHTML = initials(p.name); });
+          }).withFailureHandler(function(err){
+            alert('Could not clear photo: ' + (err && err.message ? err.message : err));
+          }).apiClearPhoto(id);
+        };
+      }
+      menu.querySelectorAll('[data-act="move"]').forEach(function(b){
+        b.onclick = function(){ closePopovers(); moveLayer(id, Number(b.dataset.layer)); };
+      });
+      menu.querySelectorAll('[data-act="role"]').forEach(function(b){
+        b.onclick = function(){ closePopovers(); setRoleTag(id, b.dataset.role); };
+      });
+      if(!isDerivedLayer1){
+      menu.querySelector('[data-act="remove"]').onclick = function(){
+        closePopovers();
+        var where = state.view === 'leadership' ? 'the leadership overview' : state.currentOutlet;
+        if(!confirm('Remove ' + p.name + ' from ' + where + '? Their Mastersheet record (if any) is unaffected.')) return;
+        google.script.run.withSuccessHandler(function(){
+          removePersonLocally_(id);
+          rerenderCurrentView();
+        }).withFailureHandler(function(err){
+          alert('Could not remove: ' + (err && err.message ? err.message : err));
+        }).apiRemovePlacement(id, state.currentOutlet);
+      };
+      }
+      if(deleteItem){
+        menu.querySelector('[data-act="delete"]').onclick = function(){
+          closePopovers();
+          if(!confirm('Delete ' + p.name + ' completely? This removes them from every outlet/leadership page they’re on and deletes their photo -- not just this one card. This cannot be undone from within the org chart.')) return;
+          google.script.run.withSuccessHandler(function(){
+            removePersonLocally_(id);
+            rerenderCurrentView();
+          }).withFailureHandler(function(err){
+            alert('Could not delete: ' + (err && err.message ? err.message : err));
+          }).apiDeletePerson(id);
+        };
+      }
+    };
+  });
+  setupLazyPhotos();
+}
+
+function findPerson(id){
+  var d = state.detail;
+  var pool = [].concat(d.layer1, d.layer2, d.layer3);
+  if(d.outletLeads){ d.outletLeads.forEach(function(o){ pool = pool.concat(o.people); }); }
+  return pool.filter(function(p){ return p.id === id; })[0];
+}
+
+/**
+ * Re-renders from the already-loaded state.detail with no server round trip
+ * -- used after a local patch (move/role-tag/remove) so those don't pay for
+ * a full apiGetOutletDetail refetch just to move one card. Also carries
+ * forward any photo that was already showing before the re-render (a fresh
+ * render always starts every avatar back at initials-only) and stops the
+ * lazy-photo observer from re-fetching those -- otherwise sorting a whole
+ * Unsorted column one person at a time would re-download everyone's photo
+ * on every single click.
+ */
+function rerenderCurrentView(){
+  var photoCache = {};
+  document.querySelectorAll('[data-avatar-for]').forEach(function(el){
+    var img = el.querySelector('img');
+    if(img) photoCache[el.getAttribute('data-avatar-for')] = img.src;
+  });
+  preservedPhotoCache = photoCache; // consumed once by the setupLazyPhotos() call the render below triggers
+
+  if(state.view === 'leadership'){ renderLeadership(); }
+  else if(state.view === 'outlet'){ renderOutlet(); }
+}
+
+function removePersonLocally_(id){
+  var d = state.detail;
+  [d.layer1, d.layer2, d.layer3].forEach(function(list){
+    var idx = -1;
+    for(var i=0;i<list.length;i++){ if(list[i].id === id){ idx = i; break; } }
+    if(idx !== -1) list.splice(idx, 1);
+  });
+}
+
+/** Local-only move -- avoids a full outlet reload (and re-fetching every already-loaded photo again) just to shift one card between layers. */
+function moveLayer(id, newLayer){
+  google.script.run.withSuccessHandler(function(){
+    var d = state.detail;
+    var p = findPerson(id);
+    if(p){
+      removePersonLocally_(id);
+      p.layer = newLayer;
+      (newLayer === 1 ? d.layer1 : newLayer === 2 ? d.layer2 : d.layer3).push(p);
+    }
+    rerenderCurrentView();
+  }).withFailureHandler(function(err){
+    alert('Could not move: ' + (err && err.message ? err.message : err));
+  }).apiMoveLayer(id, state.currentOutlet, newLayer);
+}
+/** Local-only role-tag set -- this was the slow one Chris flagged: sorting a whole Unsorted column one person at a time used to trigger a full reload (re-fetch + re-resolve everyone + re-download every photo) per click. */
+function setRoleTag(id, tag){
+  google.script.run.withSuccessHandler(function(){
+    var p = findPerson(id);
+    if(p) p.roleTag = tag;
+    rerenderCurrentView();
+  }).withFailureHandler(function(err){
+    alert('Could not update: ' + (err && err.message ? err.message : err));
+  }).apiSetRoleTag(id, tag);
+}
+
+/**
+ * Batches every avatar that becomes visible in the same burst (almost
+ * always the whole page, right after load) into ONE apiGetPhotoDataUrls
+ * call instead of firing a separate round trip per card -- that fan-out
+ * used to be the main reason photos took so long to appear. A short debounce
+ * lets a whole IntersectionObserver callback's worth of entries collect
+ * before the batch fires; later scroll-triggered reveals (a very long
+ * roster) just form their own small batch the same way.
+ */
+/**
+ * One eager batch call for every photo on the page, instead of lazy-loading
+ * per avatar as it scrolls into view. The IntersectionObserver approach this
+ * replaced was meant to save bandwidth on a very long page, but outlet pages
+ * are only ever tens of people, and in practice its short debounce window
+ * wasn't reliably coalescing everything into one call anyway -- confirmed
+ * live 2026-09-21: a single page load was firing 6-8+ SEPARATE
+ * apiGetPhotoDataUrls calls of 1-2 photos each, each paying the full
+ * round-trip/script-startup overhead on its own. One call for the whole
+ * page is both simpler and faster.
+ */
+var preservedPhotoCache = null; // set by rerenderCurrentView right before a local re-render, consumed once here so an already-loaded photo isn't re-fetched just because the surrounding HTML got regenerated
+function setupLazyPhotos(){
+  var cache = preservedPhotoCache; preservedPhotoCache = null;
+  var ids = [];
+  document.querySelectorAll('[data-avatar-for]').forEach(function(el){
+    var id = el.getAttribute('data-avatar-for');
+    if(cache && cache[id]){ setAvatarImg(el, cache[id]); return; }
+    var p = findPerson(id);
+    if(p && p.hasPhoto) ids.push(id);
+  });
+  if(!ids.length) return;
+  var t0 = Date.now();
+  google.script.run.withSuccessHandler(function(map){
+    logPerf('apiGetPhotoDataUrls(' + ids.length + ')', Date.now() - t0);
+    var t = map && map._timing;
+    if(t){
+      logPerfRaw('  server total: ' + t.totalMs + 'ms (needMigration=' + t.needMigrationCount + ')');
+      logPerfRaw('  readPeopleMap: ' + t.readPeopleMapMs + 'ms, initialLoop: ' + t.initialLoopMs + 'ms');
+      if(t.folderResolveMs !== undefined){
+        var fd = t.folderResolveDetail || {};
+        logPerfRaw('  folderResolve: ' + t.folderResolveMs + 'ms (resolveFolder=' + fd.resolveFolderMs + 'ms[' + fd.withFolderCount + '] subfolderFetch=' + fd.subfolderFetchMs + 'ms)');
+      }
+      if(t.pfileLookupMs !== undefined){
+        var pd = t.pfileLookupDetail || {};
+        logPerfRaw('  pfileLookup: ' + t.pfileLookupMs + 'ms (found=' + t.pfileFoundCount + ', withPhotoFolder=' + pd.withPhotoFolderCount + ', photoFetch=' + pd.photoFetchMs + 'ms)');
+      }
+      if(t.cbMigrationMs !== undefined) logPerfRaw('  cbMigration: ' + t.cbMigrationMs + 'ms (count=' + t.cbMigrationCount + ')');
+      if(t.avatarFetch){
+        var af = t.avatarFetch;
+        logPerfRaw('  avatarFetch: thumbMeta=' + af.thumbMetaMs + 'ms thumbFetch=' + af.thumbFetchMs + 'ms[' + af.thumbFoundCount + ' found, ' + Math.round((af.totalThumbBytes||0)/1024) + 'KB] fallback=' + af.fallbackFetchMs + 'ms[' + (af.fallbackCount||0) + ']');
+      }
+    }
+    ids.forEach(function(id){
+      var res = map && map[id];
+      if(!res || !res.dataUrl) return;
+      // querySelectorAll, not querySelector -- the leadership overview can show the same person twice (a tier card AND an outlet-leads chip, or Outlet In-Charge at two outlets), and every occurrence needs the photo.
+      document.querySelectorAll('[data-avatar-for="' + id + '"]').forEach(function(el){ setAvatarImg(el, res.dataUrl); });
+    });
+  }).apiGetPhotoDataUrls(ids);
+}
+
+// --- lightbox ---
+var lightboxOverlay = document.getElementById('lightbox-overlay');
+document.getElementById('lightbox-close').onclick = function(){ lightboxOverlay.hidden = true; };
+lightboxOverlay.addEventListener('click', function(ev){ if(ev.target === lightboxOverlay) lightboxOverlay.hidden = true; });
+
+function openLightbox(p){
+  if(!p) return;
+  document.getElementById('lightbox-name').textContent = p.name + (p.nickname ? ' “' + p.nickname + '”' : '');
+  document.getElementById('lightbox-meta').textContent = p.position;
+  var avatarEl = document.getElementById('lightbox-avatar');
+  var hint = document.getElementById('lightbox-hint');
+  var existingImg = document.querySelector('[data-avatar-for="' + p.id + '"] img');
+  if(existingImg){
+    setAvatarImg(avatarEl, existingImg.src); hint.hidden = true;
+  } else if(p.hasPhoto){
+    avatarEl.textContent = initials(p.name); hint.hidden = true;
+    google.script.run.withSuccessHandler(function(res){
+      if(res && res.dataUrl){ setAvatarImg(avatarEl, res.dataUrl); }
+    }).apiGetPhotoDataUrl(p.id);
+  } else {
+    avatarEl.textContent = initials(p.name); hint.hidden = false;
+  }
+
+  var contactBlock = document.getElementById('lightbox-contact');
+  var noContactHint = document.getElementById('lightbox-no-contact-hint');
+  if(employmentStatusGroup(p.employmentType) === 'Part-Time'){
+    // Part-time staff don't get a company phone/laptop -- the field doesn't apply, so don't even show it.
+    contactBlock.hidden = true;
+    noContactHint.hidden = false;
+  } else {
+    contactBlock.hidden = false;
+    noContactHint.hidden = true;
+    document.getElementById('lightbox-phone').value = p.companyPhone || '';
+    document.getElementById('lightbox-email').value = p.companyEmail || '';
+    document.getElementById('lightbox-saved').hidden = true;
+    document.getElementById('lightbox-save-contact').onclick = function(){
+      var phone = document.getElementById('lightbox-phone').value.trim();
+      var email = document.getElementById('lightbox-email').value.trim();
+      var btn = document.getElementById('lightbox-save-contact');
+      btn.disabled = true; btn.textContent = 'Saving...';
+      google.script.run.withSuccessHandler(function(){
+        p.companyPhone = phone; p.companyEmail = email;
+        btn.disabled = false; btn.textContent = 'Save contact info';
+        var saved = document.getElementById('lightbox-saved');
+        saved.hidden = false;
+        setTimeout(function(){ saved.hidden = true; }, 2000);
+      }).withFailureHandler(function(err){
+        btn.disabled = false; btn.textContent = 'Save contact info';
+        alert('Could not save: ' + (err && err.message ? err.message : err));
+      }).apiSetCompanyContact(p.id, phone, email);
+    };
+  }
+
+  lightboxOverlay.hidden = false;
+}
+
+// --- overlay modal (add employee / upload photo) ---
+var overlay = document.getElementById('overlay');
+var modalBody = document.getElementById('modal-body');
+function closeModal(){ overlay.hidden = true; modalBody.innerHTML = ''; }
+overlay.addEventListener('click', function(ev){ if(ev.target === overlay) closeModal(); });
+
+function openPhotoModal(p){
+  modalBody.innerHTML =
+    '<h3>Upload photo for ' + escapeHtml(p.name) + '</h3>' +
+    '<div class="field"><label>Choose a photo</label><input type="file" id="mf-photo" accept="image/*"></div>' +
+    '<div class="modal-actions"><button type="button" class="btn btn-ghost" id="mf-cancel">Cancel</button><button type="button" class="btn btn-primary" id="mf-save">Save</button></div>';
+  overlay.hidden = false;
+  document.getElementById('mf-cancel').onclick = closeModal;
+  document.getElementById('mf-save').onclick = function(){
+    var file = document.getElementById('mf-photo').files[0];
+    if(!file){ closeModal(); return; }
+    var saveBtn = document.getElementById('mf-save');
+    var reader = new FileReader();
+    reader.onload = function(){
+      var base64 = reader.result.split(',')[1];
+      saveBtn.disabled = true; saveBtn.textContent = 'Uploading...';
+      google.script.run.withSuccessHandler(function(res){
+        if(res && res.dataUrl){
+          document.querySelectorAll('[data-avatar-for="' + p.id + '"]').forEach(function(el){ setAvatarImg(el, res.dataUrl); });
+        }
+        p.hasPhoto = true;
+        closeModal();
+      }).withFailureHandler(function(err){
+        saveBtn.disabled = false; saveBtn.textContent = 'Save';
+        alert('Could not upload: ' + (err && err.message ? err.message : err));
+      }).apiUploadPhoto(p.id, base64, file.type);
+    };
+    reader.readAsDataURL(file);
+  };
+}
+
+/**
+ * TEMPORARY bulk photo importer (Chris, 2026-09-22, ~130 people missing
+ * photos). Filenames must contain the person's Employee ID (e.g. "Ivy
+ * SGFT0531.jpeg") -- the server matches on that, never on the name alone.
+ */
+function openBulkImportPhotosModal(){
+  modalBody.innerHTML =
+    '<h3>Bulk import professional photos</h3>' +
+    '<p class="lx-hint">Select every photo at once. Each filename must contain the person\'s Employee ID (e.g. "Ivy SGFT0531.jpeg") -- that\'s what matches each photo to the right person. Uploads into their P-file, sets it as their org chart photo, and inserts the same image into the Mastersheet\'s own photo column.</p>' +
+    '<div class="field"><label>Choose photos</label><input type="file" id="bi-files" accept="image/*" multiple></div>' +
+    '<div class="modal-actions"><button type="button" class="btn btn-ghost" id="bi-cancel">Cancel</button><button type="button" class="btn btn-primary" id="bi-import">Import</button></div>' +
+    '<div id="bi-progress" style="margin-top:12px;font-size:0.8rem;color:var(--ink-soft);"></div>';
+  overlay.hidden = false;
+  document.getElementById('bi-cancel').onclick = closeModal;
+  document.getElementById('bi-import').onclick = function(){
+    var files = Array.prototype.slice.call(document.getElementById('bi-files').files);
+    if(!files.length){ closeModal(); return; }
+    var importBtn = document.getElementById('bi-import');
+    var progress = document.getElementById('bi-progress');
+    importBtn.disabled = true; importBtn.textContent = 'Reading files...';
+    progress.textContent = 'Reading ' + files.length + ' file(s)...';
+
+    var readers = files.map(function(file){
+      return new Promise(function(resolve){
+        var reader = new FileReader();
+        reader.onload = function(){ resolve({ filename: file.name, mimeType: file.type, base64: reader.result.split(',')[1] }); };
+        reader.readAsDataURL(file);
+      });
+    });
+
+    Promise.all(readers).then(function(items){
+      importBtn.textContent = 'Importing ' + items.length + '...';
+      progress.textContent = 'Uploading and updating the Mastersheet -- this can take a little while for ' + items.length + ' photos...';
+      google.script.run.withSuccessHandler(function(results){
+        importBtn.disabled = false; importBtn.textContent = 'Import';
+        progress.textContent = '';
+        var ok = results.filter(function(r){ return r.status === 'ok'; });
+        var problems = results.filter(function(r){ return r.status !== 'ok'; });
+        var lines = ['Imported ' + ok.length + ' of ' + results.length + '.'];
+        if(problems.length){
+          lines.push('', 'Needs attention:');
+          problems.forEach(function(r){ lines.push('- ' + r.filename + ': ' + r.status + (r.employeeId ? ' (' + r.employeeId + ')' : '')); });
+        }
+        var cbFailed = ok.filter(function(r){ return r.cb !== 'ok'; });
+        if(cbFailed.length){
+          lines.push('', 'Uploaded to P-file OK, but Mastersheet photo column update failed for:');
+          cbFailed.forEach(function(r){ lines.push('- ' + r.name + ' (' + r.employeeId + '): ' + r.cb); });
+        }
+        var siblingsUpdated = ok.filter(function(r){ return r.sibling; });
+        if(siblingsUpdated.length){
+          lines.push('', 'Also copied onto a P/T Sub duplicate row for:');
+          siblingsUpdated.forEach(function(r){ lines.push('- ' + r.name + ' (sibling ' + r.sibling.employeeId + '): ' + r.sibling.status); });
+        }
+        var hadExisting = ok.filter(function(r){ return r.hadExistingPhoto; });
+        if(hadExisting.length){
+          lines.push('', 'Note: these already had a photo of some kind in their P-file before this import (both now exist -- you may want to remove the old one):');
+          hadExisting.forEach(function(r){ lines.push('- ' + r.name + ' (' + r.employeeId + ')'); });
+        }
+        alert(lines.join('\n'));
+        closeModal();
+        reloadCurrentView(); // not hardRefresh -- see the same note on btn-repair-photos above; writePersonRow_ already invalidates the one cache this touches
+      }).withFailureHandler(function(err){
+        importBtn.disabled = false; importBtn.textContent = 'Import';
+        progress.textContent = '';
+        alert('Import failed: ' + (err && err.message ? err.message : err));
+      }).apiBulkImportProfessionalPhotos(items);
+    });
+  };
+}
+
+/**
+ * TEMPORARY (Chris, 2026-09-22): during manual photo review he's finding
+ * people who already have a usable photo sitting in their P-file that
+ * never made it into the Mastersheet's CB column. Paste full names, one per
+ * line -- finds each person's existing P-file photo and pushes it into CB,
+ * without uploading anything new.
+ */
+function openScanPfilePhotosModal(){
+  modalBody.innerHTML =
+    '<h3>Scan P-files for existing photos</h3>' +
+    '<p class="lx-hint">Paste full names, one per line. For each match, finds any photo already sitting in their P-file and inserts it into the Mastersheet\'s photo column -- nothing new is ever uploaded to the P-file.</p>' +
+    '<div class="field"><label>Full names (one per line)</label><textarea id="sp-names" rows="10" style="width:100%;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);border-radius:8px;padding:9px 10px;font:500 0.875rem var(--font-body);"></textarea></div>' +
+    '<div class="modal-actions"><button type="button" class="btn btn-ghost" id="sp-cancel">Cancel</button><button type="button" class="btn btn-primary" id="sp-scan">Scan &amp; Update</button></div>' +
+    '<div id="sp-progress" style="margin-top:12px;font-size:0.8rem;color:var(--ink-soft);"></div>';
+  overlay.hidden = false;
+  document.getElementById('sp-cancel').onclick = closeModal;
+  document.getElementById('sp-scan').onclick = function(){
+    var names = document.getElementById('sp-names').value.split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+    if(!names.length){ closeModal(); return; }
+    var scanBtn = document.getElementById('sp-scan');
+    var progress = document.getElementById('sp-progress');
+    scanBtn.disabled = true; scanBtn.textContent = 'Scanning...';
+    progress.textContent = 'Scanning ' + names.length + ' name(s)...';
+
+    google.script.run.withSuccessHandler(function(results){
+      scanBtn.disabled = false; scanBtn.textContent = 'Scan & Update';
+      progress.textContent = '';
+      var ok = results.filter(function(r){ return r.status === 'ok'; });
+      var lines = ['Updated ' + ok.length + ' of ' + results.length + '.'];
+
+      var notFound = results.filter(function(r){ return r.status === 'not_found'; });
+      if(notFound.length){
+        lines.push('', 'No matching Mastersheet employee found for:');
+        notFound.forEach(function(r){ lines.push('- ' + r.input); });
+      }
+      var ambiguous = results.filter(function(r){ return r.status === 'ambiguous'; });
+      if(ambiguous.length){
+        lines.push('', 'Ambiguous (multiple matches, please check manually):');
+        ambiguous.forEach(function(r){ lines.push('- ' + r.input + ': ' + r.candidates.join(', ')); });
+      }
+      var noPhoto = results.filter(function(r){ return r.status === 'no_pfile_link' || r.status === 'no_photo_subfolder' || r.status === 'no_existing_photo'; });
+      if(noPhoto.length){
+        lines.push('', 'No existing P-file photo found for:');
+        noPhoto.forEach(function(r){ lines.push('- ' + r.name + ' (' + r.employeeId + '): ' + r.status); });
+      }
+      var cbFailed = ok.filter(function(r){ return r.cb !== 'ok'; });
+      if(cbFailed.length){
+        lines.push('', 'Found the photo, but Mastersheet update failed for:');
+        cbFailed.forEach(function(r){ lines.push('- ' + r.name + ' (' + r.employeeId + '): ' + r.cb); });
+      }
+      var errors = results.filter(function(r){ return r.status && r.status.indexOf('error') === 0; });
+      if(errors.length){
+        lines.push('', 'Errors:');
+        errors.forEach(function(r){ lines.push('- ' + r.input + ': ' + r.status); });
+      }
+      alert(lines.join('\n'));
+      closeModal();
+      reloadCurrentView(); // not hardRefresh -- see the same note on btn-repair-photos above; writePersonRow_ already invalidates the one cache this touches
+    }).withFailureHandler(function(err){
+      scanBtn.disabled = false; scanBtn.textContent = 'Scan & Update';
+      progress.textContent = '';
+      alert('Scan failed: ' + (err && err.message ? err.message : err));
+    }).apiScanAndUpdateExistingPfilePhotos(names);
+  };
+}
+
+var searchDebounce = null;
+function openAddModal(layer, roleTagHint){
+  var labels = state.detail.layerLabels;
+  var baseLabel = layer === 1 ? labels.layer1 : (layer === 2 ? labels.layer2 : labels.layer3);
+  var layerLabel = baseLabel + (roleTagHint && layer !== 1 ? ' (' + roleTagHint + ')' : '');
+  modalBody.innerHTML =
+    '<h3>Add to ' + escapeHtml(layerLabel) + '</h3>' +
+    '<div class="field"><label>Search existing people</label><input type="text" id="mf-search" placeholder="Name, nickname, position, outlet..." autocomplete="off"></div>' +
+    '<div class="search-results" id="mf-results" hidden></div>' +
+    '<div class="divider-or">or</div>' +
+    '<button type="button" class="link-btn" id="mf-toggle-new">+ Create a new person (not in the Mastersheet)</button>' +
+    '<div id="mf-new-fields" hidden>' +
+      '<div class="field"><label>Full name *</label><input type="text" id="mf-new-name"></div>' +
+      '<div class="field"><label>Nickname</label><input type="text" id="mf-new-nickname"></div>' +
+      '<div class="field"><label>Position / title</label><input type="text" id="mf-new-position"></div>' +
+      '<div class="modal-actions"><button type="button" class="btn btn-ghost" id="mf-cancel2">Cancel</button><button type="button" class="btn btn-primary" id="mf-create">Add person</button></div>' +
+    '</div>' +
+    '<div class="modal-actions" id="mf-actions"><button type="button" class="btn btn-ghost" id="mf-cancel">Cancel</button></div>';
+  overlay.hidden = false;
+  document.getElementById('mf-cancel').onclick = closeModal;
+  document.getElementById('mf-search').focus();
+
+  document.getElementById('mf-search').addEventListener('input', function(){
+    var q = this.value.trim();
+    clearTimeout(searchDebounce);
+    var resultsEl = document.getElementById('mf-results');
+    if(!q){ resultsEl.hidden = true; resultsEl.innerHTML = ''; return; }
+    searchDebounce = setTimeout(function(){
+      google.script.run.withSuccessHandler(function(matches){
+        if(!matches.length){ resultsEl.hidden = false; resultsEl.innerHTML = '<div class="search-result">No matches.</div>'; return; }
+        resultsEl.hidden = false;
+        resultsEl.innerHTML = matches.map(function(m){
+          return '<div class="search-result" data-id="' + escapeHtml(m.id) + '"><div class="sr-name">' + escapeHtml(m.name) +
+            (m.nickname ? ' “' + escapeHtml(m.nickname) + '”' : '') + '</div><div class="sr-meta">' + escapeHtml(m.position) +
+            (m.location ? ' · ' + escapeHtml(m.location) : '') + (m.source==='manual' ? ' · manually added' : '') + '</div></div>';
+        }).join('');
+        resultsEl.querySelectorAll('.search-result[data-id]').forEach(function(row){
+          row.onclick = function(){
+            var id = row.dataset.id;
+            google.script.run.withSuccessHandler(function(person){
+              finishAdd_(person);
+            }).withFailureHandler(function(err){
+              alert('Could not add: ' + (err && err.message ? err.message : err));
+            }).apiAddPlacement(id, state.currentOutlet, layer, roleTagHint);
+          };
+        });
+      }).apiSearchPeople(q);
+    }, 250);
+  });
+
+  document.getElementById('mf-toggle-new').onclick = function(){
+    document.getElementById('mf-new-fields').hidden = false;
+    document.getElementById('mf-actions').hidden = true;
+    document.getElementById('mf-new-name').focus();
+  };
+  document.getElementById('mf-cancel2').onclick = closeModal;
+  document.getElementById('mf-create').onclick = function(){
+    var name = document.getElementById('mf-new-name').value.trim();
+    if(!name){ alert('Name is required.'); return; }
+    var nickname = document.getElementById('mf-new-nickname').value.trim();
+    var position = document.getElementById('mf-new-position').value.trim();
+    var btn = document.getElementById('mf-create');
+    btn.disabled = true; btn.textContent = 'Adding...';
+    google.script.run.withSuccessHandler(function(person){
+      finishAdd_(person);
+    }).withFailureHandler(function(err){
+      btn.disabled = false; btn.textContent = 'Add person';
+      alert('Could not add: ' + (err && err.message ? err.message : err));
+    }).apiCreateManualPerson(name, nickname, position, state.currentOutlet, layer, roleTagHint);
+  };
+}
+
+/**
+ * Pushes the newly-added person straight into local state and re-renders
+ * without a server round trip -- confirmed live 2026-09-23 (Chris: adding
+ * someone "takes so long to load and need the website to be refreshed"):
+ * the old reloadCurrentView() re-fetched and re-rendered the WHOLE page,
+ * meaning every already-loaded photo got re-downloaded again just to show
+ * one new card. apiAddPlacement/apiCreateManualPerson now do the placement
+ * AND role-tag set in one server call and return the fully-resolved person,
+ * so this only ever needs a local patch + rerenderCurrentView() (same
+ * "preserve already-loaded photos" mechanism moveLayer/setRoleTag already use).
+ */
+function finishAdd_(person){
+  closeModal();
+  if(!person){ reloadCurrentView(); return; } // shouldn't happen, but don't strand the UI if it does
+  var d = state.detail;
+  if(person.layer === 1) d.layer1.push(person);
+  else if(person.layer === 2) d.layer2.push(person);
+  else d.layer3.push(person);
+  rerenderCurrentView();
+}
+
+goIndex();
+checkAdminStatus();
+</script>
+</body>
+</html>
