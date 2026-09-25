@@ -189,8 +189,8 @@ var ADMIN_ROLE_LABELS = { super: 'Super Admin', SG: 'SG Admin', MY: 'MY Admin' }
 
 // ---- FT (Full-Timer) Onboarding: a second, independent dashboard ----
 // Grouped by industry - each one its own ClickUp List inside the "FT Onboarding"
-// folder - never by outlet. MT Onboarding stays untouched/out of scope for now;
-// only SG's three industries are wired up. Access is its own roster
+// folder - never by outlet. SG's three FT industries plus the separate MT
+// Onboarding list are wired up. Access is its own roster
 // (FT_ADMINS/FT_EDITORS below), completely separate from PT's own
 // ADMINS/VIEWERS/PIC_MAPPINGS - see getFtAccess_ for exactly how a PT Super
 // Admin automatically gets full FT access too, with nobody else crossing over
@@ -198,7 +198,8 @@ var ADMIN_ROLE_LABELS = { super: 'Super Admin', SG: 'SG Admin', MY: 'MY Admin' }
 var FT_INDUSTRIES = [
   { code: 'SG_fnb', label: 'SG · F&B', listId: '901817849940' },
   { code: 'SG_beauty', label: 'SG · Beauty', listId: '901817849939' },
-  { code: 'SG_officehq', label: 'SG · Office HQ', listId: '901817849941' }
+  { code: 'SG_officehq', label: 'SG · Office HQ', listId: '901817849941' },
+  { code: 'SG_mt', label: 'SG · MT', listId: '1100670000000929' }
 ];
 var FT_ROLE_LABELS = { ftAdmin: 'FT Admin', ftEditor: 'FT Editor' };
 
