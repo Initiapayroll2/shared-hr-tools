@@ -1,0 +1,374 @@
+<style>
+  body { font-family: Arial, sans-serif; font-size: 13px; color: #222; margin: 0; padding: 12px 16px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .step { display: none; }
+  .step.active { display: block; }
+  .list { max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; }
+  .row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+  .row:hover { background: #f7f9fc; }
+  .row .meta { color: #666; font-size: 11px; }
+  .row .pct { margin-left: auto; color: #1a73e8; font-weight: bold; white-space: nowrap; }
+  .actions { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+  button { background: #1a73e8; color: #fff; border: none; border-radius: 4px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+  button.secondary { background: #eee; color: #333; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  label.field { display: block; margin-bottom: 8px; font-size: 12px; }
+  label.field span { display: block; font-weight: bold; margin-bottom: 2px; }
+  input[type=text], select { width: 100%; box-sizing: border-box; padding: 5px 7px; font-size: 12px; }
+  #searchBox { width: 100%; box-sizing: border-box; padding: 5px 7px; margin-bottom: 8px; }
+  .preview-box { background: #f7f9fc; border: 1px solid #dce3ee; border-radius: 4px; padding: 8px 10px; font-family: monospace; font-size: 12px; margin: 10px 0; word-break: break-all; }
+  .msg { padding: 10px; border-radius: 4px; margin-top: 10px; }
+  .msg.error { background: #fce8e6; color: #c5221f; }
+  .msg.success { background: #e6f4ea; color: #188038; }
+  .spinner { color: #666; font-size: 12px; }
+  ul.doc-list { margin: 4px 0 10px; padding-left: 18px; font-size: 12px; }
+  .combo { position: relative; }
+  .suggestions { display: none; position: absolute; z-index: 20; top: 100%; left: 0; right: 0; max-height: 160px; overflow-y: auto; background: #fff; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+  .suggestions.open { display: block; }
+  .suggestions .opt { padding: 6px 8px; font-size: 12px; cursor: pointer; }
+  .suggestions .opt:hover { background: #e8f0fe; }
+  .suggestions .empty { padding: 6px 8px; font-size: 12px; color: #888; }
+</style>
+
+<div id="step-applicant" class="step active">
+  <h2>1. Pick the Application Form response</h2>
+  <input type="text" id="searchBox" placeholder="Filter by name..." oninput="renderFilteredList()">
+  <div id="applicantList" class="list"><div class="spinner">Loading...</div></div>
+  <div class="actions">
+    <button onclick="goToBankStep()" id="toFieldsBtn" disabled>Next: match bank details</button>
+  </div>
+</div>
+
+<div id="step-bank" class="step">
+  <h2>2. Match a Bank Form submission (optional)</h2>
+  <p class="meta" style="color:#666;font-size:11px;">Candidates are ranked by name similarity. Confirm the correct person, or choose no bank form if it has not been submitted yet.</p>
+  <div id="bankList" class="list"></div>
+  <div class="actions">
+    <button class="secondary" onclick="showStep('step-applicant')">Back</button>
+    <button onclick="goToFieldsStep()">Next: HR fields</button>
+  </div>
+</div>
+
+<div id="step-fields" class="step">
+  <h2>3. HR fields</h2>
+  <p class="meta" style="color:#666;font-size:11px;">These are never sourced from Typeform -- fill in what's known so far; anything left blank shows as "xxx" in the folder name until confirmed.</p>
+  <label class="field"><span>Employment Type (decides which Drive folder the P-file is saved in)</span>
+    <select id="f_employmentType">
+      <option value="">-- select --</option>
+      <option value="PT">PT</option>
+      <option value="FT">FT</option>
+      <option value="Intern">Intern</option>
+      <option value="Freelance">Freelance</option>
+    </select>
+  </label>
+  <label class="field"><span>Corrected full name (only if the Typeform spelling is wrong)</span><input type="text" id="f_correctedFullName"></label>
+  <label class="field"><span>Entity</span>
+    <div class="combo">
+      <input type="text" id="f_entity" autocomplete="off" placeholder="Type to search entities...">
+      <div id="f_entity_suggestions" class="suggestions"></div>
+    </div>
+  </label>
+  <label class="field"><span>Employee ID (auto-filled from Employment Type -- edit if a real ID is already known)</span><input type="text" id="f_employeeId" placeholder="e.g. SGFT0123"></label>
+  <label class="field"><span>Pass Type</span>
+    <div class="combo">
+      <input type="text" id="f_passType" autocomplete="off" placeholder="Type to search pass types...">
+      <div id="f_passType_suggestions" class="suggestions"></div>
+    </div>
+  </label>
+  <label class="field"><span>Department</span>
+    <div class="combo">
+      <input type="text" id="f_department" autocomplete="off" placeholder="Type to search departments...">
+      <div id="f_department_suggestions" class="suggestions"></div>
+    </div>
+  </label>
+  <label class="field"><span>Position</span>
+    <div class="combo">
+      <input type="text" id="f_position" autocomplete="off" placeholder="Type to search positions...">
+      <div id="f_position_suggestions" class="suggestions"></div>
+    </div>
+  </label>
+  <div class="preview-box" id="previewBox">Folder name preview will appear here.</div>
+  <div class="actions">
+    <button class="secondary" onclick="showStep('step-bank')">Back</button>
+    <button onclick="createPfile()" id="createBtn">Create P-file</button>
+  </div>
+  <div id="createMsg"></div>
+</div>
+
+<div id="step-done" class="step">
+  <div id="doneMsg"></div>
+  <div class="actions">
+    <button onclick="resetAll()">Create another</button>
+    <button class="secondary" onclick="google.script.host.close()">Close</button>
+  </div>
+</div>
+
+<script>
+  var allApplicants = [];
+  var state = { applicationRowNumber: null, applicationFullName: '', bankRowNumber: null };
+  var previewTimer = null;
+
+  function escapeHtml(value) {
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function showStep(id) {
+    document.querySelectorAll('.step').forEach(function (el) { el.classList.remove('active'); });
+    document.getElementById(id).classList.add('active');
+  }
+
+  function loadApplicants() {
+    document.getElementById('applicantList').innerHTML = '<div class="spinner">Loading...</div>';
+    google.script.run.withSuccessHandler(function (rows) {
+      allApplicants = rows;
+      renderFilteredList();
+    }).withFailureHandler(function (error) {
+      document.getElementById('applicantList').innerHTML = '<div class="msg error">' + escapeHtml(error.message) + '</div>';
+    }).apiListApplicantsForPfile();
+  }
+
+  // Entity, Pass Type, Department, and Position all get a search-as-you-type
+  // suggestion list over a plain text input, fed by a cached options array
+  // (same pattern as the Sync Mastersheet dialog's combo fields). All four
+  // are list-only (freeform: false) -- every one of them must match the
+  // Mastersheet's own reference list exactly, so nothing stops a colleague
+  // from typing something that isn't in the list, but there is deliberately
+  // no "type your own" affordance for any of them.
+  var entityOptionsCache = [];
+  var positionOptionsCache = [];
+  var passTypeOptionsCache = [];
+  var departmentOptionsCache = [];
+
+  function attachAutocomplete(inputId, boxId, getOptions, freeform) {
+    var input = document.getElementById(inputId);
+    var box = document.getElementById(boxId);
+    // Set right before the synthetic 'input' dispatch below (needed so
+    // schedulePreview() still runs on a picked value) -- without it, that
+    // same dispatch re-enters render() and reopens the box we just closed.
+    var suppressNextRender = false;
+
+    function render() {
+      if (suppressNextRender) { suppressNextRender = false; return; }
+      var options = getOptions();
+      var query = input.value.trim().toLowerCase();
+      var matches = (query ? options.filter(function (opt) {
+        return opt.toLowerCase().indexOf(query) !== -1;
+      }) : options).slice(0, 25);
+      if (!matches.length) {
+        var emptyText = !options.length ? 'Loading...' :
+          (freeform ? 'No match -- your typed text will be used as-is.' : 'No matching option -- check spelling.');
+        box.innerHTML = '<div class="empty">' + emptyText + '</div>';
+      } else {
+        box.innerHTML = matches.map(function (opt) {
+          return '<div class="opt" data-value="' + escapeHtml(opt) + '">' + escapeHtml(opt) + '</div>';
+        }).join('');
+      }
+      box.classList.add('open');
+    }
+
+    input.addEventListener('focus', render);
+    input.addEventListener('input', render);
+    input.addEventListener('blur', function () {
+      // Delay so a click on a suggestion (which also blurs the input) still
+      // registers before the box disappears.
+      setTimeout(function () { box.classList.remove('open'); }, 150);
+    });
+    box.addEventListener('mousedown', function (event) {
+      var opt = event.target.closest('.opt');
+      if (!opt) return;
+      event.preventDefault();
+      input.value = opt.getAttribute('data-value');
+      box.classList.remove('open');
+      suppressNextRender = true;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  function loadEntityOptions() {
+    google.script.run.withSuccessHandler(function (entities) {
+      entityOptionsCache = entities;
+    }).withFailureHandler(function (error) {
+      document.getElementById('f_entity').placeholder = 'Failed to load: ' + error.message;
+    }).apiGetEntityOptions();
+  }
+
+  function loadPositionOptions() {
+    google.script.run.withSuccessHandler(function (positions) {
+      positionOptionsCache = positions;
+    }).withFailureHandler(function (error) {
+      document.getElementById('f_position').placeholder = 'Failed to load: ' + error.message;
+    }).apiGetPositionOptions();
+  }
+
+  function loadPassTypeOptions() {
+    google.script.run.withSuccessHandler(function (options) {
+      passTypeOptionsCache = options;
+    }).withFailureHandler(function (error) {
+      document.getElementById('f_passType').placeholder = 'Failed to load: ' + error.message;
+    }).apiGetPassTypeOptions();
+  }
+
+  function loadDepartmentOptions() {
+    google.script.run.withSuccessHandler(function (options) {
+      departmentOptionsCache = options;
+    }).withFailureHandler(function (error) {
+      document.getElementById('f_department').placeholder = 'Failed to load: ' + error.message;
+    }).apiGetDepartmentOptions();
+  }
+
+  // Employment Type decides the Employee ID placeholder (SGFTXXXX / SGPTXXXX
+  // / SGITXXXX / SGFLXXXX) -- auto-filled but never overwriting a real ID a
+  // colleague already typed. Re-picking a different Employment Type after
+  // the field still holds one of these placeholders (not a real ID) updates
+  // it again.
+  var EMPLOYEE_ID_PLACEHOLDERS = { PT: 'SGPTXXXX', FT: 'SGFTXXXX', Intern: 'SGITXXXX', Freelance: 'SGFLXXXX' };
+  document.getElementById('f_employmentType').addEventListener('change', function () {
+    var placeholder = EMPLOYEE_ID_PLACEHOLDERS[this.value];
+    if (!placeholder) return;
+    var employeeIdInput = document.getElementById('f_employeeId');
+    var currentValue = employeeIdInput.value.trim();
+    var isBlankOrPlaceholder = !currentValue || Object.keys(EMPLOYEE_ID_PLACEHOLDERS).map(function (k) { return EMPLOYEE_ID_PLACEHOLDERS[k]; }).indexOf(currentValue) !== -1;
+    if (isBlankOrPlaceholder) {
+      employeeIdInput.value = placeholder;
+      schedulePreview();
+    }
+  });
+
+  function renderFilteredList() {
+    var query = document.getElementById('searchBox').value.trim().toLowerCase();
+    var rows = allApplicants.filter(function (row) {
+      return !query || row.fullName.toLowerCase().indexOf(query) !== -1;
+    });
+    var container = document.getElementById('applicantList');
+    if (!rows.length) { container.innerHTML = '<div class="row">No matching responses.</div>'; return; }
+    container.innerHTML = rows.map(function (row) {
+      return '<div class="row" onclick="selectApplicant(' + row.rowNumber + ', this)">' +
+        '<input type="radio" name="applicant" value="' + row.rowNumber + '">' +
+        '<div><div>' + escapeHtml(row.fullName) + (row.nickname ? (' (' + escapeHtml(row.nickname) + ')') : '') + '</div>' +
+        '<div class="meta">Row ' + row.rowNumber + ' &middot; ' + escapeHtml(row.positionApplied || '-') +
+        ' &middot; Submitted ' + escapeHtml(row.submittedAt || '-') + ' &middot; ' + row.attachmentCount + ' attachment(s)</div></div>' +
+        '</div>';
+    }).join('');
+  }
+
+  function selectApplicant(rowNumber, el) {
+    document.querySelectorAll('#applicantList .row').forEach(function (r) { r.style.background = ''; });
+    el.style.background = '#e8f0fe';
+    el.querySelector('input[type=radio]').checked = true;
+    state.applicationRowNumber = rowNumber;
+    var selected = allApplicants.filter(function (row) { return row.rowNumber === rowNumber; })[0];
+    state.applicationFullName = selected ? selected.fullName : '';
+    document.getElementById('toFieldsBtn').disabled = false;
+  }
+
+  function goToBankStep() {
+    if (!state.applicationRowNumber) return;
+    state.bankRowNumber = null;
+    document.getElementById('bankList').innerHTML = '<div class="spinner">Loading...</div>';
+    showStep('step-bank');
+    google.script.run.withSuccessHandler(renderBankList).withFailureHandler(function (error) {
+      document.getElementById('bankList').innerHTML = '<div class="msg error">' + escapeHtml(error.message) + '</div>';
+    }).apiFindBankCandidates(state.applicationFullName);
+  }
+
+  function renderBankList(rows) {
+    var html = '<div class="row" onclick="selectBank(null, this)" style="background:#e8f0fe">' +
+      '<input type="radio" name="bank" checked><div><div>No Bank Form yet</div>' +
+      '<div class="meta">Create the P-file now and add bank documents on a later rerun.</div></div></div>';
+    html += rows.map(function (row) {
+      return '<div class="row" onclick="selectBank(' + row.rowNumber + ', this)">' +
+        '<input type="radio" name="bank"><div><div>' + escapeHtml(row.candidateName) + '</div>' +
+        '<div class="meta">Row ' + row.rowNumber + ' &middot; Submitted ' + escapeHtml(row.submittedAt || '-') + '</div></div>' +
+        '<div class="pct">' + Math.round(row.similarity * 100) + '% match</div></div>';
+    }).join('');
+    document.getElementById('bankList').innerHTML = html;
+  }
+
+  function selectBank(rowNumber, el) {
+    document.querySelectorAll('#bankList .row').forEach(function (row) { row.style.background = ''; });
+    el.style.background = '#e8f0fe';
+    el.querySelector('input[type=radio]').checked = true;
+    state.bankRowNumber = rowNumber;
+  }
+
+  function goToFieldsStep() {
+    showStep('step-fields');
+    schedulePreview();
+  }
+
+  function collectHrFields() {
+    return {
+      employmentType: document.getElementById('f_employmentType').value,
+      correctedFullName: document.getElementById('f_correctedFullName').value,
+      entity: document.getElementById('f_entity').value,
+      employeeId: document.getElementById('f_employeeId').value,
+      passType: document.getElementById('f_passType').value,
+      department: document.getElementById('f_department').value,
+      position: document.getElementById('f_position').value,
+    };
+  }
+
+  function schedulePreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(refreshPreview, 300);
+  }
+  document.addEventListener('input', function (event) {
+    if (event.target.closest && event.target.closest('#step-fields')) schedulePreview();
+  });
+
+  function refreshPreview() {
+    var box = document.getElementById('previewBox');
+    box.textContent = 'Computing...';
+    google.script.run.withSuccessHandler(function (name) {
+      box.textContent = name;
+    }).withFailureHandler(function (error) {
+      box.textContent = error.message;
+    }).apiPreviewPfileFolderName(state.applicationRowNumber, collectHrFields());
+  }
+
+  function createPfile() {
+    if (!document.getElementById('f_employmentType').value) {
+      document.getElementById('createMsg').innerHTML = '<div class="msg error">Select an Employment Type (PT / FT / Intern / Freelance) first -- it decides which Drive folder the P-file is saved in.</div>';
+      return;
+    }
+    document.getElementById('createBtn').disabled = true;
+    document.getElementById('createMsg').innerHTML = '<div class="spinner">Creating P-file -- this can take a moment while the template copies...</div>';
+    google.script.run.withSuccessHandler(function (result) {
+      document.getElementById('createBtn').disabled = false;
+      document.getElementById('createMsg').innerHTML = '';
+      var docs = result.documents || { uploaded: [], skipped: [], failed: [] };
+      var html = '<div class="msg success">' + (result.created ? 'Created' : 'Found existing') + ' P-file: <strong>' +
+        escapeHtml(result.name) + '</strong><br><a href="' + escapeHtml(result.webViewLink) + '" target="_blank">Open in Drive</a></div>';
+      if (docs.uploaded.length) html += '<p>Uploaded:</p><ul class="doc-list">' + docs.uploaded.map(function (n) { return '<li>' + escapeHtml(n) + '</li>'; }).join('') + '</ul>';
+      if (docs.skipped.length) html += '<p>Already present (skipped):</p><ul class="doc-list">' + docs.skipped.map(function (n) { return '<li>' + escapeHtml(n) + '</li>'; }).join('') + '</ul>';
+      if (docs.failed.length) html += '<p style="color:#c5221f;">Failed:</p><ul class="doc-list">' + docs.failed.map(function (n) { return '<li>' + escapeHtml(n) + '</li>'; }).join('') + '</ul>';
+      document.getElementById('doneMsg').innerHTML = html;
+      showStep('step-done');
+    }).withFailureHandler(function (error) {
+      document.getElementById('createBtn').disabled = false;
+      document.getElementById('createMsg').innerHTML = '<div class="msg error">' + escapeHtml(error.message) + '</div>';
+    }).apiCreatePfile(state.applicationRowNumber, state.bankRowNumber, collectHrFields());
+  }
+
+  function resetAll() {
+    state = { applicationRowNumber: null, applicationFullName: '', bankRowNumber: null };
+    document.getElementById('toFieldsBtn').disabled = true;
+    document.getElementById('searchBox').value = '';
+    ['f_employmentType', 'f_correctedFullName', 'f_entity', 'f_employeeId', 'f_passType', 'f_department', 'f_position'].forEach(function (id) {
+      document.getElementById(id).value = '';
+    });
+    showStep('step-applicant');
+    loadApplicants();
+  }
+
+  loadApplicants();
+  loadEntityOptions();
+  loadPositionOptions();
+  loadPassTypeOptions();
+  loadDepartmentOptions();
+  attachAutocomplete('f_entity', 'f_entity_suggestions', function () { return entityOptionsCache; }, false);
+  attachAutocomplete('f_passType', 'f_passType_suggestions', function () { return passTypeOptionsCache; }, false);
+  attachAutocomplete('f_department', 'f_department_suggestions', function () { return departmentOptionsCache; }, false);
+  attachAutocomplete('f_position', 'f_position_suggestions', function () { return positionOptionsCache; }, false);
+</script>

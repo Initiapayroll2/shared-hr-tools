@@ -1,0 +1,290 @@
+<style>
+  body { font-family: Arial, sans-serif; font-size: 13px; color: #222; margin: 0; padding: 12px 16px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .step { display: none; }
+  .step.active { display: block; }
+  .list { max-height: 420px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; }
+  .row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+  .row:hover { background: #f7f9fc; }
+  .row .meta { color: #666; font-size: 11px; }
+  .row .pct { margin-left: auto; color: #1a73e8; font-weight: bold; white-space: nowrap; }
+  .actions { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+  button { background: #1a73e8; color: #fff; border: none; border-radius: 4px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+  button.secondary { background: #eee; color: #333; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  .field-table { width: 100%; border-collapse: collapse; }
+  .field-table td { padding: 4px 6px; vertical-align: top; border-bottom: 1px solid #f0f0f0; }
+  .field-table td.label { width: 220px; font-weight: bold; }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-left: 6px; }
+  .badge.typeform { background: #e8f0fe; color: #1a73e8; }
+  .badge.bank { background: #e6f4ea; color: #188038; }
+  .badge.manual { background: #fce8e6; color: #c5221f; }
+  .badge.computed { background: #fef7e0; color: #b06000; }
+  input[type=text], select { width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 12px; }
+  input[disabled] { background: #f1f1f1; color: #888; }
+  .fields-scroll { max-height: 440px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 4px 8px; }
+  .msg { padding: 10px; border-radius: 4px; margin-top: 10px; }
+  .msg.error { background: #fce8e6; color: #c5221f; }
+  .msg.success { background: #e6f4ea; color: #188038; }
+  .checkbox-row { font-size: 12px; }
+  .spinner { color: #666; font-size: 12px; }
+  .combo { position: relative; }
+  .suggestions { display: none; position: absolute; z-index: 20; top: 100%; left: 0; right: 0; max-height: 160px; overflow-y: auto; background: #fff; border: 1px solid #ccc; border-top: none; border-radius: 0 0 4px 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+  .suggestions.open { display: block; }
+  .suggestions .opt { padding: 6px 8px; font-size: 12px; cursor: pointer; }
+  .suggestions .opt:hover { background: #e8f0fe; }
+  .suggestions .empty { padding: 6px 8px; font-size: 12px; color: #888; }
+</style>
+
+<div id="step-applicant" class="step active">
+  <h2>1. Pick the Application Form response</h2>
+  <div class="checkbox-row">
+    <label><input type="checkbox" id="showAll" onchange="loadApplicants()"> Show all (not just the last 60 days)</label>
+  </div>
+  <div id="applicantList" class="list"><div class="spinner">Loading...</div></div>
+  <div class="actions">
+    <button onclick="goToBankStep()" id="toBankBtn" disabled>Next: match bank details</button>
+  </div>
+</div>
+
+<div id="step-bank" class="step">
+  <h2>2. Match a Bank Form submission (optional)</h2>
+  <p class="meta">Ranked by name similarity only -- always confirm visually before picking one, never assume the top match is correct.</p>
+  <div id="bankList" class="list"></div>
+  <div class="actions">
+    <button class="secondary" onclick="showStep('step-applicant')">Back</button>
+    <button onclick="goToReviewStep()">Next: review fields</button>
+  </div>
+</div>
+
+<div id="step-review" class="step">
+  <h2>3. Review before writing to the Mastersheet</h2>
+  <p class="meta">Review the details below. Auto-computed fields cannot be edited. Nothing is written until you click Submit.</p>
+  <div id="fieldsContainer" class="fields-scroll"></div>
+  <div class="actions">
+    <button class="secondary" onclick="showStep('step-bank')">Back</button>
+    <button onclick="submitRow()" id="submitBtn">Submit to Mastersheet</button>
+  </div>
+  <div id="reviewMsg"></div>
+</div>
+
+<div id="step-done" class="step">
+  <div id="doneMsg"></div>
+  <div class="actions">
+    <button onclick="resetAll()">Sync another</button>
+    <button class="secondary" onclick="google.script.host.close()">Close</button>
+  </div>
+</div>
+
+<script>
+  var state = { applicationRow: null, bankRow: null, descriptors: [] };
+
+  function escapeHtml(value) {
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function showStep(id) {
+    document.querySelectorAll('.step').forEach(function (el) { el.classList.remove('active'); });
+    document.getElementById(id).classList.add('active');
+  }
+
+  function loadApplicants() {
+    document.getElementById('applicantList').innerHTML = '<div class="spinner">Loading...</div>';
+    document.getElementById('toBankBtn').disabled = true;
+    var showAll = document.getElementById('showAll').checked;
+    google.script.run.withSuccessHandler(renderApplicantList).withFailureHandler(showLoadError('applicantList')).apiListApplicationResponses(showAll);
+  }
+
+  function showLoadError(containerId) {
+    return function (error) {
+      document.getElementById(containerId).innerHTML = '<div class="msg error">' + escapeHtml(error.message) + '</div>';
+    };
+  }
+
+  function renderApplicantList(rows) {
+    state.applicantsCache = rows;
+    var container = document.getElementById('applicantList');
+    if (!rows.length) { container.innerHTML = '<div class="row">No responses found.</div>'; return; }
+    container.innerHTML = rows.map(function (row) {
+      return '<div class="row" onclick="selectApplicant(' + row.rowNumber + ', this)">' +
+        '<input type="radio" name="applicant" value="' + row.rowNumber + '">' +
+        '<div><div>' + escapeHtml(row.fullName) + '</div>' +
+        '<div class="meta">Row ' + row.rowNumber + ' &middot; Submitted ' + escapeHtml(row.submittedAt || '-') + '</div></div>' +
+        '</div>';
+    }).join('');
+  }
+
+  function selectApplicant(rowNumber, el) {
+    document.querySelectorAll('#applicantList .row').forEach(function (r) { r.style.background = ''; });
+    el.style.background = '#e8f0fe';
+    el.querySelector('input[type=radio]').checked = true;
+    state.applicationRowNumber = rowNumber;
+    // Looked up from the cached server response, never scraped back out of
+    // the rendered DOM -- the row's markup also contains a "Row N ·
+    // Submitted ..." meta line, and a naive DOM query risks pulling that
+    // text in alongside the name.
+    var match = state.applicantsCache.filter(function (row) { return row.rowNumber === rowNumber; })[0];
+    state.applicationFullName = match ? match.fullName : '';
+    document.getElementById('toBankBtn').disabled = false;
+  }
+
+  function goToBankStep() {
+    if (!state.applicationRowNumber) return;
+    document.getElementById('bankList').innerHTML = '<div class="spinner">Loading...</div>';
+    showStep('step-bank');
+    state.bankRowNumber = null;
+    google.script.run.withSuccessHandler(renderBankList).withFailureHandler(showLoadError('bankList')).apiFindBankCandidates(state.applicationFullName);
+  }
+
+  function renderBankList(rows) {
+    var container = document.getElementById('bankList');
+    var html = '<div class="row" onclick="selectBank(null, this)"><input type="radio" name="bank" checked><div>No bank match -- leave Bank Name / Account No. blank</div></div>';
+    html += rows.map(function (row) {
+      return '<div class="row" onclick="selectBank(' + row.rowNumber + ', this)">' +
+        '<input type="radio" name="bank">' +
+        '<div><div>' + escapeHtml(row.candidateName) + '</div>' +
+        '<div class="meta">Row ' + row.rowNumber + ' &middot; Submitted ' + escapeHtml(row.submittedAt || '-') + '</div></div>' +
+        '<div class="pct">' + Math.round(row.similarity * 100) + '% match</div>' +
+        '</div>';
+    }).join('');
+    container.innerHTML = html;
+  }
+
+  function selectBank(rowNumber, el) {
+    document.querySelectorAll('#bankList .row').forEach(function (r) { r.style.background = ''; });
+    el.style.background = '#e8f0fe';
+    el.querySelector('input[type=radio]').checked = true;
+    state.bankRowNumber = rowNumber;
+  }
+
+  function goToReviewStep() {
+    document.getElementById('fieldsContainer').innerHTML = '<div class="spinner">Loading...</div>';
+    showStep('step-review');
+    google.script.run.withSuccessHandler(renderReview).withFailureHandler(showLoadError('fieldsContainer'))
+      .apiGetMastersheetPreview(state.applicationRowNumber, state.bankRowNumber);
+  }
+
+  function renderReview(result) {
+    state.descriptors = result.descriptors;
+    // The DOM only ever carries the array INDEX, never the descriptor's
+    // real fieldKey_ (some Mastersheet headers embed a literal newline,
+    // e.g. "PERSONAL \nPHONE No." -- round-tripping that through an HTML
+    // attribute is fragile). submitRow() resolves index -> real key
+    // straight from state.descriptors, in memory, never via the DOM.
+    var rows = state.descriptors.map(function (d, index) {
+      var input;
+      if (d.source === 'computed') {
+        // Never submitted -- no data-index, so submitRow()'s
+        // [data-index] query simply skips it. The server writes the real
+        // formula unconditionally regardless of what (if anything) this
+        // field held -- see addEmployeeRow_() in MastersheetSync.js.
+        input = '<input type="text" value="(auto-computed -- not editable)" disabled>';
+      } else if (d.options && d.searchable) {
+        // Search-as-you-type over the same live options list, restricted
+        // to picking from it (no "type your own" affordance) -- see
+        // SYNC_SEARCHABLE_HEADERS in MastersheetMapping.js for which
+        // fields get this instead of a plain <select>.
+        input = '<div class="combo">' +
+          '<input type="text" data-index="' + index + '" class="combo-input" autocomplete="off" ' +
+          'value="' + escapeHtml(d.value) + '" placeholder="Type to search...">' +
+          '<div class="suggestions" data-combo-index="' + index + '"></div>' +
+          '</div>';
+      } else if (d.options) {
+        var opts = [''].concat(d.options).map(function (o) {
+          return '<option value="' + escapeHtml(o) + '"' + (o === d.value ? ' selected' : '') + '>' + escapeHtml(o || '(blank)') + '</option>';
+        }).join('');
+        input = '<select data-index="' + index + '">' + opts + '</select>';
+      } else {
+        input = '<input type="text" data-index="' + index + '" value="' + escapeHtml(d.value) + '">';
+      }
+      return '<tr><td class="label">' + escapeHtml(d.label) +
+        '<span class="badge ' + d.source + '">' + d.source + '</span></td><td>' + input + '</td></tr>';
+    }).join('');
+    document.getElementById('fieldsContainer').innerHTML = '<table class="field-table">' + rows + '</table>';
+
+    state.descriptors.forEach(function (d, index) {
+      if (d.source !== 'computed' && d.options && d.searchable) {
+        attachComboSearch_(index, d.options);
+      }
+    });
+  }
+
+  /**
+   * Wires search-as-you-type for one review-table combo field, rendered by
+   * renderReview() above. Unlike PfileDialog.html's attachAutocomplete()
+   * (fixed field ids), these fields are dynamically generated per
+   * descriptor index, so input/box are found by [data-index] /
+   * [data-combo-index] instead of a fixed element id. Always strict
+   * (list-only, no freeform) -- every field this is used for is meant to
+   * only ever hold a value the Mastersheet's own dropdown already allows.
+   */
+  function attachComboSearch_(index, options) {
+    var input = document.querySelector('input.combo-input[data-index="' + index + '"]');
+    var box = document.querySelector('.suggestions[data-combo-index="' + index + '"]');
+    if (!input || !box) return;
+
+    function render() {
+      var query = input.value.trim().toLowerCase();
+      var matches = (query ? options.filter(function (opt) {
+        return opt.toLowerCase().indexOf(query) !== -1;
+      }) : options).slice(0, 25);
+      if (!matches.length) {
+        box.innerHTML = '<div class="empty">' + (query ? 'No matching option -- check spelling.' : 'Start typing to search.') + '</div>';
+      } else {
+        box.innerHTML = matches.map(function (opt) {
+          return '<div class="opt" data-value="' + escapeHtml(opt) + '">' + escapeHtml(opt) + '</div>';
+        }).join('');
+      }
+      box.classList.add('open');
+    }
+
+    input.addEventListener('focus', render);
+    input.addEventListener('input', render);
+    input.addEventListener('blur', function () {
+      // Delay so a click on a suggestion (which also blurs the input)
+      // still registers before the box disappears.
+      setTimeout(function () { box.classList.remove('open'); }, 150);
+    });
+    box.addEventListener('mousedown', function (event) {
+      var opt = event.target.closest('.opt');
+      if (!opt) return;
+      event.preventDefault();
+      input.value = opt.getAttribute('data-value');
+      box.classList.remove('open');
+    });
+  }
+
+  function submitRow() {
+    var fieldValues = {};
+    document.querySelectorAll('#fieldsContainer [data-index]').forEach(function (el) {
+      var descriptor = state.descriptors[parseInt(el.getAttribute('data-index'), 10)];
+      fieldValues[descriptor.key] = el.value;
+    });
+    document.getElementById('submitBtn').disabled = true;
+    document.getElementById('reviewMsg').innerHTML = '<div class="spinner">Writing to Mastersheet...</div>';
+    google.script.run.withSuccessHandler(function (result) {
+      document.getElementById('submitBtn').disabled = false;
+      document.getElementById('reviewMsg').innerHTML = '';
+      var employeeIdNote = result.employeeId
+        ? ('Employee ID: ' + escapeHtml(result.employeeId))
+        : 'Employee ID will fill in once you click into the row in the Mastersheet.';
+      document.getElementById('doneMsg').innerHTML = '<div class="msg success">Added to the Mastersheet at row ' +
+        result.rowNumber + '. ' + employeeIdNote + '</div>';
+      showStep('step-done');
+    }).withFailureHandler(function (error) {
+      document.getElementById('submitBtn').disabled = false;
+      document.getElementById('reviewMsg').innerHTML = '<div class="msg error">' + escapeHtml(error.message) +
+        '</div>';
+    }).apiSubmitMastersheetRow(fieldValues, state.applicationRowNumber);
+  }
+
+  function resetAll() {
+    state = { applicationRow: null, bankRow: null, descriptors: [] };
+    document.getElementById('toBankBtn').disabled = true;
+    showStep('step-applicant');
+    loadApplicants();
+  }
+
+  loadApplicants();
+</script>

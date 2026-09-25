@@ -1,0 +1,299 @@
+<style>
+  body { font-family: Arial, sans-serif; font-size: 12px; color: #202124; margin: 0; padding: 0; }
+  .header { padding: 12px 14px 10px; border-bottom: 1px solid #eee; }
+  .title { font-size: 14px; font-weight: bold; }
+  .employee { margin-top: 8px; display: flex; align-items: center; gap: 8px; }
+  .avatar { width: 26px; height: 26px; border-radius: 50%; background: #e8f0fe; color: #1a73e8; font-size: 11px; font-weight: bold; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .employee-name { font-size: 12px; font-weight: bold; }
+  .employee-meta { font-size: 11px; color: #5f6368; }
+  .search-wrap { padding: 10px 14px 0; }
+  input[type=text] { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 12px; border: 1px solid #dadce0; border-radius: 4px; }
+  input[type=text]:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 1px #1a73e8; }
+  .results { border: 1px solid #dadce0; border-top: none; border-radius: 0 0 4px 4px; margin-top: -1px; max-height: 220px; overflow-y: auto; display: none; }
+  .result-row { padding: 7px 10px; font-size: 12px; cursor: pointer; border-bottom: 1px solid #f1f1f1; display: flex; justify-content: space-between; gap: 8px; }
+  .result-row:hover { background: #f7f9fc; }
+  .result-badge { font-size: 10px; color: #5f6368; white-space: nowrap; flex-shrink: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 0; }
+  .chip { display: flex; align-items: center; gap: 5px; background: #e8f0fe; color: #0c447c; font-size: 11px; padding: 3px 8px; border-radius: 12px; }
+  .chip .x { cursor: pointer; font-weight: bold; }
+  .empty-hint { font-size: 11px; color: #9aa0a6; text-align: center; padding: 20px 14px; }
+  .footer { border-top: 1px solid #eee; padding: 10px 14px; margin-top: 8px; }
+  .footer .pfile { font-size: 11px; color: #5f6368; margin-bottom: 8px; }
+  button.generate { width: 100%; background: #1a73e8; color: #fff; border: none; border-radius: 4px; padding: 9px; font-size: 13px; font-weight: bold; cursor: pointer; }
+  .msg { padding: 8px 10px; border-radius: 4px; font-size: 11px; margin: 8px 14px 0; }
+  .msg.error { background: #fce8e6; color: #c5221f; }
+  .msg.info { background: #e8f0fe; color: #0c447c; }
+  .msg.success { background: #e6f4ea; color: #188038; }
+  .spinner { font-size: 11px; color: #5f6368; }
+  .fill-section { padding: 10px 14px 0; }
+  .fill-template-title { font-size: 12px; font-weight: bold; margin-bottom: 6px; }
+  .fill-field { margin-bottom: 8px; }
+  .fill-field label { display: block; font-size: 11px; color: #5f6368; margin-bottom: 2px; }
+  .fill-field .field-error { color: #c5221f; font-size: 10px; margin-top: 2px; display: none; }
+  .results-list { padding: 10px 14px 0; }
+  .result-item { font-size: 12px; padding: 6px 0; border-bottom: 1px solid #f1f1f1; }
+  .result-item a { color: #1a73e8; }
+  button.secondary { width: 100%; background: #f1f3f4; color: #202124; border: none; border-radius: 4px; padding: 8px; font-size: 12px; cursor: pointer; margin-top: 6px; }
+</style>
+
+<div class="header">
+  <div class="title">Generate letter</div>
+  <div id="employeeBlock" class="employee"><span class="spinner">Loading employee...</span></div>
+</div>
+
+<div class="search-wrap">
+  <input type="text" id="searchBox" placeholder="Search letters -- e.g. COE, confirmation, NDA" oninput="onSearchInput()" autocomplete="off">
+  <div id="results" class="results"></div>
+</div>
+
+<div id="chips" class="chips"></div>
+<div id="emptyHint" class="empty-hint">Start typing to find a letter -- e.g. &ldquo;COE&rdquo;, &ldquo;promotion&rdquo;, &ldquo;NDA&rdquo;</div>
+<div id="msg"></div>
+
+<div id="fillStep" class="fill-section" style="display:none;"></div>
+<div id="resultsStep" class="results-list" style="display:none;"></div>
+
+<div class="footer" id="footerArea">
+  <div class="pfile" id="pfileNote"></div>
+  <button class="generate" id="genBtn" onclick="onGenerateClick()">Select letters to generate</button>
+</div>
+
+<script>
+  // selected: [{key, letterType, field, content}] -- key is the template's
+  // Drive id (stable), never a search-result array index (a search result
+  // list reshuffles on every keystroke, so an index would point at the
+  // wrong template a moment later).
+  var state = { context: null, selected: [] };
+
+  function escapeHtml(value) {
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function loadContext() {
+    google.script.run.withSuccessHandler(renderContext).withFailureHandler(function (error) {
+      document.getElementById('employeeBlock').innerHTML = '<div class="msg error" style="margin:0;">' + escapeHtml(error.message) + '</div>';
+    }).apiGetLetterSidebarContext();
+  }
+
+  function renderContext(context) {
+    state.context = context;
+    var initials = (context.fullName || '?').trim().split(/\s+/).slice(0, 2)
+      .map(function (w) { return w.charAt(0).toUpperCase(); }).join('');
+    var metaParts = [context.employeeId, context.officialCompany, context.position].filter(Boolean);
+    document.getElementById('employeeBlock').innerHTML =
+      '<div class="avatar">' + escapeHtml(initials) + '</div>' +
+      '<div><div class="employee-name">' + escapeHtml(context.fullName || '(no name)') + '</div>' +
+      '<div class="employee-meta">' + escapeHtml(metaParts.join(' · ')) + '</div></div>';
+    document.getElementById('pfileNote').textContent = context.pfileUrl
+      ? 'Will save to this employee’s P-file (column S)'
+      : 'No P-file link found in column S for this row yet -- generated letters will need a manual save location.';
+  }
+
+  var searchTimer = null;
+  var lastResults = [];
+  function onSearchInput() {
+    clearTimeout(searchTimer);
+    var query = document.getElementById('searchBox').value;
+    if (!query.trim()) {
+      document.getElementById('results').style.display = 'none';
+      return;
+    }
+    searchTimer = setTimeout(function () {
+      google.script.run.withSuccessHandler(renderResults).withFailureHandler(function (error) {
+        var container = document.getElementById('results');
+        container.style.display = 'block';
+        container.innerHTML = '<div class="msg error" style="margin:0;">' + escapeHtml(error.message) + '</div>';
+      }).apiSearchLetterTemplates(query);
+    }, 200);
+  }
+
+  function renderResults(matches) {
+    var selectedKeys = state.selected.map(function (s) { return s.key; });
+    lastResults = matches.filter(function (m) { return selectedKeys.indexOf(m.key) === -1; });
+    var container = document.getElementById('results');
+    container.style.display = 'block';
+    if (!lastResults.length) {
+      container.innerHTML = '<div class="result-row" style="cursor:default;color:#9aa0a6;">No matching letters.</div>';
+      return;
+    }
+    container.innerHTML = lastResults.map(function (m, i) {
+      return '<div class="result-row" data-result-index="' + i + '">' +
+        '<span>' + escapeHtml(m.content) + '</span>' +
+        '<span class="result-badge">' + escapeHtml(m.letterType) + '</span></div>';
+    }).join('');
+    Array.prototype.forEach.call(container.querySelectorAll('[data-result-index]'), function (el) {
+      el.onclick = function () {
+        selectTemplate(lastResults[parseInt(el.getAttribute('data-result-index'), 10)]);
+      };
+    });
+  }
+
+  function selectTemplate(template) {
+    state.selected.push(template);
+    document.getElementById('searchBox').value = '';
+    document.getElementById('results').style.display = 'none';
+    document.getElementById('msg').innerHTML = '';
+    renderChips();
+  }
+
+  function removeTemplate(key) {
+    state.selected = state.selected.filter(function (s) { return s.key !== key; });
+    renderChips();
+  }
+
+  function renderChips() {
+    var chipsEl = document.getElementById('chips');
+    chipsEl.innerHTML = state.selected.map(function (s) {
+      return '<span class="chip">' + escapeHtml(s.content) +
+        '<span class="x" data-remove-key="' + escapeHtml(s.key) + '">&times;</span></span>';
+    }).join('');
+    Array.prototype.forEach.call(chipsEl.querySelectorAll('[data-remove-key]'), function (el) {
+      el.onclick = function () { removeTemplate(el.getAttribute('data-remove-key')); };
+    });
+    document.getElementById('emptyHint').style.display = state.selected.length ? 'none' : 'block';
+    var btn = document.getElementById('genBtn');
+    btn.textContent = state.selected.length ? ('Generate ' + state.selected.length + ' selected') : 'Select letters to generate';
+  }
+
+  function setBusy(isBusy, label) {
+    var btn = document.getElementById('genBtn');
+    btn.disabled = isBusy;
+    if (label) btn.textContent = label;
+  }
+
+  function onGenerateClick() {
+    if (!state.selected.length) return;
+    document.getElementById('msg').innerHTML = '';
+    setBusy(true, 'Checking templates...');
+    var keys = state.selected.map(function (s) { return s.key; });
+    google.script.run.withSuccessHandler(onPrepared).withFailureHandler(function (error) {
+      setBusy(false, 'Generate ' + state.selected.length + ' selected');
+      document.getElementById('msg').innerHTML = '<div class="msg error">' + escapeHtml(error.message) + '</div>';
+    }).apiPrepareLetterGeneration(keys);
+  }
+
+  function onPrepared(prepared) {
+    state.prepared = prepared;
+    var needsInput = prepared.some(function (t) { return t.unresolvedFields.length > 0; });
+    if (needsInput) {
+      setBusy(false);
+      renderFillForm(prepared);
+    } else {
+      runGeneration(prepared.map(function (t) { return { key: t.key, unresolvedValues: [] }; }));
+    }
+  }
+
+  function fieldInputId(templateKey, token, occurrenceIndex) {
+    return 'fill__' + templateKey + '__' + occurrenceIndex + '__' + encodeURIComponent(token);
+  }
+
+  function renderFillForm(prepared) {
+    document.getElementById('chips').style.display = 'none';
+    document.getElementById('emptyHint').style.display = 'none';
+    document.querySelector('.search-wrap').style.display = 'none';
+
+    var html = prepared.filter(function (t) { return t.unresolvedFields.length > 0; }).map(function (t) {
+      var fields = t.unresolvedFields.map(function (f) {
+        var label = f.occurrenceCount > 1
+          ? (f.token + ' (' + (f.occurrenceIndex + 1) + ' of ' + f.occurrenceCount + ')')
+          : f.token;
+        var inputId = fieldInputId(t.key, f.token, f.occurrenceIndex);
+        return '<div class="fill-field">' +
+          '<label for="' + inputId + '">' + escapeHtml(label) + '</label>' +
+          '<input type="text" id="' + inputId + '" data-template-key="' + escapeHtml(t.key) + '" ' +
+          'data-token="' + escapeHtml(f.token) + '" data-occurrence-index="' + f.occurrenceIndex + '">' +
+          '<div class="field-error" id="' + inputId + '-error">Enter a value</div>' +
+          '</div>';
+      }).join('');
+      return '<div class="fill-template-title">' + escapeHtml(t.content) + '</div>' + fields;
+    }).join('');
+
+    document.getElementById('fillStep').innerHTML = html;
+    document.getElementById('fillStep').style.display = 'block';
+
+    document.getElementById('footerArea').innerHTML =
+      '<div class="pfile">' + escapeHtml(document.getElementById('pfileNote').textContent) + '</div>' +
+      '<button class="generate" id="confirmFillBtn" onclick="onConfirmFillClick()">Generate</button>' +
+      '<button class="secondary" onclick="google.script.host.close()">Cancel</button>';
+  }
+
+  function onConfirmFillClick() {
+    var inputs = document.querySelectorAll('#fillStep input[data-template-key]');
+    var valid = true;
+    inputs.forEach(function (input) {
+      var errorEl = document.getElementById(input.id + '-error');
+      if (!input.value.trim()) {
+        errorEl.style.display = 'block';
+        valid = false;
+      } else {
+        errorEl.style.display = 'none';
+      }
+    });
+    if (!valid) return;
+
+    var byTemplate = {};
+    inputs.forEach(function (input) {
+      var key = input.getAttribute('data-template-key');
+      if (!byTemplate[key]) byTemplate[key] = [];
+      byTemplate[key].push({
+        token: input.getAttribute('data-token'),
+        occurrenceIndex: parseInt(input.getAttribute('data-occurrence-index'), 10),
+        value: input.value.trim(),
+      });
+    });
+
+    var selections = state.prepared.map(function (t) {
+      return { key: t.key, unresolvedValues: byTemplate[t.key] || [] };
+    });
+    document.getElementById('confirmFillBtn').disabled = true;
+    document.getElementById('confirmFillBtn').textContent = 'Generating...';
+    runGeneration(selections);
+  }
+
+  function runGeneration(selections) {
+    google.script.run.withSuccessHandler(onGenerated).withFailureHandler(function (error) {
+      setBusy(false, 'Generate ' + state.selected.length + ' selected');
+      var confirmBtn = document.getElementById('confirmFillBtn');
+      if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = 'Generate'; }
+      document.getElementById('msg').innerHTML = '<div class="msg error">' + escapeHtml(error.message) + '</div>';
+    }).apiGenerateLetters(selections);
+  }
+
+  function onGenerated(results) {
+    document.getElementById('fillStep').style.display = 'none';
+    var html = results.map(function (r) {
+      if (r.manual) {
+        return '<div class="result-item">' + escapeHtml(r.content) +
+          ' -- this is a folder of templates, not a single document: ' +
+          '<a href="' + escapeHtml(r.folderUrl || r.fileUrl) + '" target="_blank">open it and pick manually</a></div>';
+      }
+      return '<div class="result-item">' + escapeHtml(r.content) +
+        ' -- <a href="' + escapeHtml(r.fileUrl) + '" target="_blank">open document</a></div>';
+    }).join('');
+    document.getElementById('resultsStep').innerHTML =
+      '<div class="msg success" style="margin:0 0 8px;">Done -- review each document before sending.</div>' + html;
+    document.getElementById('resultsStep').style.display = 'block';
+    document.getElementById('footerArea').innerHTML =
+      '<button class="generate" onclick="resetAll()">Generate more letters</button>' +
+      '<button class="secondary" onclick="google.script.host.close()">Close</button>';
+  }
+
+  function resetAll() {
+    state = { context: state.context, selected: [] };
+    document.querySelector('.search-wrap').style.display = 'block';
+    document.getElementById('chips').style.display = 'flex';
+    document.getElementById('fillStep').style.display = 'none';
+    document.getElementById('fillStep').innerHTML = '';
+    document.getElementById('resultsStep').style.display = 'none';
+    document.getElementById('resultsStep').innerHTML = '';
+    document.getElementById('msg').innerHTML = '';
+    document.getElementById('footerArea').innerHTML =
+      '<div class="pfile" id="pfileNote"></div>' +
+      '<button class="generate" id="genBtn" onclick="onGenerateClick()">Select letters to generate</button>';
+    renderContext(state.context);
+    renderChips();
+  }
+
+  loadContext();
+</script>
